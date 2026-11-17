@@ -282,3 +282,34 @@ select option { color: var(--text); background-color: var(--panel); }
     white-space: nowrap;
   }
 }
+
+
+/* В портретной мобильной шапке показываем весь статус отдельной строкой */
+@media (max-width: 480px) and (orientation: portrait) {
+  .topbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px 8px;
+  }
+  .brand-lockup { flex: 1 1 100%; }
+  .topbar-actions {
+    width: 100%;
+    flex: 1 1 100%;
+    justify-content: flex-start;
+    flex-wrap: wrap;
+  }
+  .connection-pill {
+    flex: 0 1 auto;
+    width: max-content;
+    max-width: 100%;
+    overflow: visible;
+    white-space: normal;
+  }
+  .connection-pill span:last-child {
+    overflow: visible;
+    text-overflow: clip;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+}
