@@ -1,7 +1,7 @@
 {
-  "name": "FORONE.KZ — складской контроль",
-  "short_name": "FORONE Stock",
-  "description": "Офлайн складской учет декоративных панелей, луверов и профилей.",
+  "name": "FORONE.KZ — склад (TEST)",
+  "short_name": "FORONE TEST",
+  "description": "Тестовая изолированная версия складского приложения FORONE.KZ.",
   "start_url": ".",
   "display": "standalone",
   "background_color": "#091316",

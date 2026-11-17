@@ -205,7 +205,7 @@ function createEnvironment({ spreadsheetId = 'TEST_SHEET_ID', seed = {} } = {}) 
 
 function loadScript(env, path) {
   const source = fs.readFileSync(path, 'utf8');
-  vm.runInContext(source + '\n;this.__script = { doGet, doPost, syncForoneStock, FORONE_setup, FORONE_selfTest, FORONE_dryRun, FORONE_ping, buildStockPayload_, mergeStockPlan_, validateOperation_, normalizeOperation_, collectOperations_, readTargetRows_, readSheetRows_, STOCK_HEADERS, OP_HEADERS, ERR_HEADERS, COL, newSet_, getForoneSpreadsheet_ };', env.context, { filename: path });
+  vm.runInContext(source + '\n;this.__script = { doGet, doPost, syncForoneStock, FORONE_setup, FORONE_selfTest, FORONE_dryRun, FORONE_ping, buildStockPayload_, mergeStockPlan_, validateOperation_, normalizeOperation_, collectOperations_, readTargetRows_, readSheetRows_, STOCK_HEADERS, OP_HEADERS, ERR_HEADERS, COL, newSet_, getForoneSpreadsheet_, getSpreadsheetId_ };', env.context, { filename: path });
   return env.context.__script;
 }
 

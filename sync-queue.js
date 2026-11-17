@@ -19,7 +19,7 @@
 
   var SYNC_STATE_VERSION = 3;
   var OP_KEY_PREFIX = 'op-';
-  var DEVICE_KEY = 'forone-stock-device-v1';
+  var DEVICE_KEY = 'forone-stock-work-device-v2';
   var MAX_QUEUE_BATCH = 50;
   var REQUEST_TIMEOUT = 20000;
 

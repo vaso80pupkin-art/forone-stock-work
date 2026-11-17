@@ -8,7 +8,7 @@
  *  · запросы к Google (импорт и Web App) проходят напрямую, мы их не кэшируем:
  *    остатки должны быть свежими, а не вчерашними.
  */
-const CACHE_NAME = 'forone-stock-v23';
+const CACHE_NAME = 'forone-stock-work-v24';
 const APP_SHELL = [
   './', './index.html', './styles.css', './app.js', './sync-queue.js', './visual-recognition.js',
   './manifest.json', './manus-routes.json', './vendor/html5-qrcode.min.js', './vendor/xlsx.full.min.js'
@@ -21,7 +21,7 @@ self.addEventListener('install', (event) => {
 
 self.addEventListener('activate', (event) => {
   event.waitUntil(caches.keys().then((keys) => Promise.all(
-    keys.filter((key) => key !== CACHE_NAME).map((key) => caches.delete(key))
+    keys.filter((key) => key.startsWith('forone-stock-work-') && key !== CACHE_NAME).map((key) => caches.delete(key))
   )).then(() => self.clients.claim()));
 });
 

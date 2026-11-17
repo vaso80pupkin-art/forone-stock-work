@@ -2,6 +2,12 @@
 
 Публичный сайт: [https://vaso80pupkin-art.github.io/forone-stock-work/](https://vaso80pupkin-art.github.io/forone-stock-work/). GitHub Pages публикуется из корня ветки `main`.
 
+## Изолированный тестовый стенд
+
+Первый репозиторий [`forone-stock`](https://github.com/vaso80pupkin-art/forone-stock) и исходная складская таблица не меняются. Эта версия работает отдельно: [открыть тестовую копию Google Таблицы](https://docs.google.com/spreadsheets/d/1kD4H7rZ1y5AYi3eEszBZU4-j8_mrj_hcT2WtXB77PK8/edit). Сейчас копия доступна только владельцу; публичный доступ к данным не включался.
+
+`FORONE_Sync_v2.gs` в этом репозитории закреплён за ID тестовой копии и игнорирует унаследованный ID исходной таблицы. Локальные данные, настройки и кеш PWA также отделены от первой версии. На новом устройстве Google-импорт выключен до явной настройки.
+
 Мобильное одностраничное приложение (PWA) для складского учёта и проверки наличия
 декоративных бамбуковых панелей, луверов и профилей.
 
@@ -71,7 +77,7 @@ python3 -m http.server 8080
 
 ```bash
 cd tests
-node gs-tests.js      # серверная логика Apps Script: 117 проверок
+node gs-tests.js      # серверная логика Apps Script: 124 проверки
 node sync-tests.js    # клиентская очередь и слияние остатков: 109 проверок
 node mock-webapp.js 8099   # учебный Web App для сквозной проверки без Google
 ```

@@ -11,6 +11,8 @@ const { createEnvironment, loadScript, postEvent, getEvent, parseOutput } = requ
 
 const GS = path.join(__dirname, '..', 'FORONE_Sync_v2.gs');
 const SHEET_ID = 'TEST_SHEET_ID';
+const TEST_COPY_ID = '1kD4H7rZ1y5AYi3eEszBZU4-j8_mrj_hcT2WtXB77PK8';
+const PRODUCTION_ID = '1fanDUGGwc8rioi5cnkE1Xydpv3r1pq9L755YztUmLCQ';
 
 let passed = 0;
 let failed = 0;
@@ -95,6 +97,14 @@ function rowIndexFor(sheet, sku) {
 
 function errorRows(sheet) {
   return values(sheet).slice(1).filter((row) => String(row[0]).trim());
+}
+
+group('0. Изоляция тестовой копии от исходной таблицы');
+{
+  const env = createEnvironment({ spreadsheetId: SHEET_ID });
+  env.properties.set('FORONE_SPREADSHEET_ID', PRODUCTION_ID);
+  const api = loadScript(env, GS);
+  check('унаследованный ID исходной таблицы игнорируется', api.getSpreadsheetId_() === TEST_COPY_ID, api.getSpreadsheetId_());
 }
 
 // ===========================================================================

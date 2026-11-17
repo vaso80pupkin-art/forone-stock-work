@@ -21,8 +21,8 @@
  *   5. FORONE_selfTest() — автотесты чистой логики прямо в редакторе скриптов
  *
  * УСТАНОВКА (кратко, подробно в README_СИНХРОНИЗАЦИЯ.md):
- *   1. Откройте таблицу → Расширения → Google Apps Script (или script.google.com → новый проект
- *      и скопируйте ID таблицы в FORONE_SPREADSHEET_ID).
+ *   1. Откройте тестовую копию таблицы из README → Расширения → Google Apps Script.
+ *      Этот файл уже закреплён за тестовой копией; исходную таблицу не используйте.
  *   2. Вставьте весь этот файл, сохраните.
  *   3. Запустите функцию FORONE_setup один раз и подтвердите права Редактора.
  *   4. Deploy → New deployment → Web app:
@@ -40,7 +40,9 @@
 // НАСТРОЙКИ
 // ---------------------------------------------------------------------------
 
-var FORONE_SPREADSHEET_ID = '1fanDUGGwc8rioi5cnkE1Xydpv3r1pq9L755YztUmLCQ';
+// Второй репозиторий намеренно работает только с тестовой копией.
+var FORONE_SPREADSHEET_ID = '1kD4H7rZ1y5AYi3eEszBZU4-j8_mrj_hcT2WtXB77PK8';
+var FORONE_PRODUCTION_SPREADSHEET_ID = '1fanDUGGwc8rioi5cnkE1Xydpv3r1pq9L755YztUmLCQ';
 
 var FORONE_CONFIG = {
   version: '2.0.0',
@@ -1214,7 +1216,11 @@ function getForoneSpreadsheet_() {
 }
 
 function getSpreadsheetId_() {
-  return text_(readProperty_('FORONE_SPREADSHEET_ID', '')) || text_(FORONE_SPREADSHEET_ID);
+  var configuredId = text_(readProperty_('FORONE_SPREADSHEET_ID', ''));
+  // При копировании проекта могли сохраниться свойства оригинала — никогда не
+  // разрешаем им перенаправить тестовую версию на production-таблицу.
+  if (configuredId && configuredId !== FORONE_PRODUCTION_SPREADSHEET_ID) return configuredId;
+  return text_(FORONE_SPREADSHEET_ID);
 }
 
 function safeName_() {

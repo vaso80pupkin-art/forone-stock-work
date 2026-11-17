@@ -1,7 +1,7 @@
-const STORAGE_KEY = 'forone-stock-state-v1';
-const DEFAULT_GOOGLE_SHEET_URL = 'https://docs.google.com/spreadsheets/d/1fanDUGGwc8rioi5cnkE1Xydpv3r1pq9L755YztUmLCQ/edit?usp=drivesdk';
+const STORAGE_KEY = 'forone-stock-work-state-v2';
+const DEFAULT_GOOGLE_SHEET_URL = 'https://docs.google.com/spreadsheets/d/1kD4H7rZ1y5AYi3eEszBZU4-j8_mrj_hcT2WtXB77PK8/edit?usp=drivesdk';
 const DEFAULT_GOOGLE_SHEET_NAME = 'FORONE_Остатки';
-const SHIFT_KEY = 'forone-stock-shift-v1';
+const SHIFT_KEY = 'forone-stock-work-shift-v2';
 
 const seedProducts = [
   { id: 'p-001', sku: 'Н234-YP', name: 'Бамбуковая панель Natural Oak', category: 'Панель', length: 3000, stock: 36, orderOnly: false, barcode: 'Н234-YP', retired: false, updatedAt: Date.now() },
@@ -20,7 +20,7 @@ const monthNames = ['января', 'февраля', 'марта', 'апрел�
 
 let state = loadState();
 let activeView = state.activeView || 'scanner';
-const THEME_KEY = 'forone-stock-theme-v1';
+const THEME_KEY = 'forone-stock-work-theme-v2';
 let activeTheme = localStorage.getItem(THEME_KEY) === 'light' ? 'light' : 'dark';
 let selectedProductId = null;
 let scannerInstance = null;
@@ -78,16 +78,16 @@ function loadState() {
       stored.operations = (stored.operations || []).map((operation) => ({ ...operation, syncStatus: operation.syncStatus || 'local' }));
       if (!Array.isArray(stored.queue)) stored.queue = [];
       stored.sync = stored.sync || {};
-      stored.source = { googleUrl: DEFAULT_GOOGLE_SHEET_URL, googleEnabled: true, googleSheet: DEFAULT_GOOGLE_SHEET_NAME, googleLastSync: 0, googleLastFetch: 0, googleAutoConfigured: false, ...(stored.source || {}) };
+      stored.source = { googleUrl: DEFAULT_GOOGLE_SHEET_URL, googleEnabled: false, googleSheet: DEFAULT_GOOGLE_SHEET_NAME, googleLastSync: 0, googleLastFetch: 0, googleAutoConfigured: true, ...(stored.source || {}) };
       if (stored.source.googleUrl.includes('1AZnORUbYuI-C3Kv4f3Absh3dGRJ6XQFavi0il4_Tk-c')) stored.source.googleUrl = DEFAULT_GOOGLE_SHEET_URL;
       if (stored.source.googleSheet === 'Октябрь-Ноябрь') stored.source.googleSheet = DEFAULT_GOOGLE_SHEET_NAME;
-      if (!stored.source.googleAutoConfigured) { stored.source.googleEnabled = true; stored.source.googleAutoConfigured = true; }
+      if (!stored.source.googleAutoConfigured) { stored.source.googleEnabled = false; stored.source.googleAutoConfigured = true; }
       return stored;
     }
   } catch (error) {
     console.warn('Не удалось прочитать локальную базу', error);
   }
-  return { products: seedProducts.map((product) => ({ ...product, reserved: 0, warehouse: 'Алматы', zone: '', rack: '', bin: '' })), operations: [], queue: [], sync: {}, activeView: 'scanner', source: { googleUrl: DEFAULT_GOOGLE_SHEET_URL, googleEnabled: true, googleSheet: DEFAULT_GOOGLE_SHEET_NAME, googleLastSync: 0, googleLastFetch: 0, googleAutoConfigured: true } };
+  return { products: seedProducts.map((product) => ({ ...product, reserved: 0, warehouse: 'Алматы', zone: '', rack: '', bin: '' })), operations: [], queue: [], sync: {}, activeView: 'scanner', source: { googleUrl: DEFAULT_GOOGLE_SHEET_URL, googleEnabled: false, googleSheet: DEFAULT_GOOGLE_SHEET_NAME, googleLastSync: 0, googleLastFetch: 0, googleAutoConfigured: true } };
 }
 
 function saveState() {
