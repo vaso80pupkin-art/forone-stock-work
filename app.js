@@ -1,5 +1,5 @@
 const STORAGE_KEY = 'forone-stock-work-state-v2';
-const DEFAULT_GOOGLE_SHEET_URL = 'https://docs.google.com/spreadsheets/d/1kD4H7rZ1y5AYi3eEszBZU4-j8_mrj_hcT2WtXB77PK8/edit?usp=drivesdk';
+const DEFAULT_GOOGLE_SHEET_URL = '';
 const DEFAULT_GOOGLE_SHEET_NAME = 'FORONE_Остатки';
 const SHIFT_KEY = 'forone-stock-work-shift-v2';
 
@@ -78,8 +78,12 @@ function loadState() {
       stored.operations = (stored.operations || []).map((operation) => ({ ...operation, syncStatus: operation.syncStatus || 'local' }));
       if (!Array.isArray(stored.queue)) stored.queue = [];
       stored.sync = stored.sync || {};
-      stored.source = { googleUrl: DEFAULT_GOOGLE_SHEET_URL, googleEnabled: false, googleSheet: DEFAULT_GOOGLE_SHEET_NAME, googleLastSync: 0, googleLastFetch: 0, googleAutoConfigured: true, ...(stored.source || {}) };
-      if (stored.source.googleUrl.includes('1AZnORUbYuI-C3Kv4f3Absh3dGRJ6XQFavi0il4_Tk-c')) stored.source.googleUrl = DEFAULT_GOOGLE_SHEET_URL;
+      stored.source = { googleUrl: DEFAULT_GOOGLE_SHEET_URL, googleEnabled: false, googleSheet: DEFAULT_GOOGLE_SHEET_NAME, googleLastSync: 0, googleLastFetch: 0, googleAutoConfigured: true, workCopyModeV2: false, ...(stored.source || {}) };
+      if (!stored.source.workCopyModeV2) {
+        stored.source.googleUrl = DEFAULT_GOOGLE_SHEET_URL;
+        stored.source.googleEnabled = false;
+        stored.source.workCopyModeV2 = true;
+      }
       if (stored.source.googleSheet === 'Октябрь-Ноябрь') stored.source.googleSheet = DEFAULT_GOOGLE_SHEET_NAME;
       if (!stored.source.googleAutoConfigured) { stored.source.googleEnabled = false; stored.source.googleAutoConfigured = true; }
       return stored;
@@ -87,7 +91,7 @@ function loadState() {
   } catch (error) {
     console.warn('Не удалось прочитать локальную базу', error);
   }
-  return { products: seedProducts.map((product) => ({ ...product, reserved: 0, warehouse: 'Алматы', zone: '', rack: '', bin: '' })), operations: [], queue: [], sync: {}, activeView: 'scanner', source: { googleUrl: DEFAULT_GOOGLE_SHEET_URL, googleEnabled: false, googleSheet: DEFAULT_GOOGLE_SHEET_NAME, googleLastSync: 0, googleLastFetch: 0, googleAutoConfigured: true } };
+  return { products: seedProducts.map((product) => ({ ...product, reserved: 0, warehouse: 'Алматы', zone: '', rack: '', bin: '' })), operations: [], queue: [], sync: {}, activeView: 'scanner', source: { googleUrl: DEFAULT_GOOGLE_SHEET_URL, googleEnabled: false, googleSheet: DEFAULT_GOOGLE_SHEET_NAME, googleLastSync: 0, googleLastFetch: 0, googleAutoConfigured: true, workCopyModeV2: true } };
 }
 
 function saveState() {
@@ -1214,6 +1218,7 @@ function initSyncModule() {
     element: (selector) => document.querySelector(selector),
     notify: (message, tone) => showToast(message, tone),
     updateConnectionLabel,
+    onStockUpdated() { renderAll(); },
     onSynced(item, result) {
       // Артикул в базе FORONE повторяется, поэтому позицию ищем по артикулу + названию + категории.
       const product = FORONESync.resolveProduct(item);

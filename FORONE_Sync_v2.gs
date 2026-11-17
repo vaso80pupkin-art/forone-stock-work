@@ -11,7 +11,7 @@
  *        │                                     ▼
  *        └────────────────────────────► лист FORONE_Остатки (рабочий остаток)
  *                                              ▲
- *   Исходные листы (номенклатура) ─────────────┘ слияние дельтами, без затирки
+ *   Офисная таблица (только чтение) ───────────┘ источник по текущему месяцу
  *
  * Что делает этот файл:
  *   1. doGet(e)   — проверка связи (?action=ping) и выдача рабочих остатков (?action=stock)
@@ -20,7 +20,7 @@
  *   4. FORONE_setup()    — подготовка листов, заголовков и триггера (запустить один раз)
  *   5. FORONE_selfTest() — автотесты чистой логики прямо в редакторе скриптов
  *
- * УСТАНОВКА (кратко, подробно в README_СИНХРОНИЗАЦИЯ.md):
+ * УСТАНОВКА (кратко, подробно в SYNCHRONIZATION.md):
  *   1. Откройте тестовую копию таблицы из README → Расширения → Google Apps Script.
  *      Этот файл уже закреплён за тестовой копией; исходную таблицу не используйте.
  *   2. Вставьте весь этот файл, сохраните.
@@ -32,22 +32,25 @@
  *   6. В свойствах скрипта (Project settings → Script properties) задайте
  *      FORONE_SHARED_SECRET — этот же ключ введите в настройках приложения.
  *
- * ВАЖНО: этот файл НЕ изменяет исходные листы. Он читает их и пишет только в
- * FORONE_Остатки, FORONE_Операции и FORONE_Ошибки.
+ * ВАЖНО: офисная таблица открывается только для чтения. Скрипт пишет только в
+ * FORONE_Остатки, FORONE_Операции и FORONE_Ошибки рабочей копии.
  */
 
 // ---------------------------------------------------------------------------
 // НАСТРОЙКИ
 // ---------------------------------------------------------------------------
 
-// Второй репозиторий намеренно работает только с тестовой копией.
-var FORONE_SPREADSHEET_ID = '1kD4H7rZ1y5AYi3eEszBZU4-j8_mrj_hcT2WtXB77PK8';
-var FORONE_PRODUCTION_SPREADSHEET_ID = '1fanDUGGwc8rioi5cnkE1Xydpv3r1pq9L755YztUmLCQ';
+// ID офисного источника и рабочей копии задаются приватно в Script Properties.
+var FORONE_PROTECTED_SPREADSHEET_IDS = [
+  '1fanDUGGwc8rioi5cnkE1Xydpv3r1pq9L755YztUmLCQ',
+  '1kD4H7rZ1y5AYi3eEszBZU4-j8_mrj_hcT2WtXB77PK8'
+];
 
 var FORONE_CONFIG = {
-  version: '2.0.0',
-  // Листы-справочники (только чтение). Добавляйте новые месяцы сюда.
-  sourceSheets: ['Октябрь-Ноябрь'],
+  version: '2.1.0',
+  // При появлении нового листа скрипт сам выберет период с текущим месяцем.
+  // Если нового листа ещё нет, используется последний успешно прочитанный лист.
+  sourceSheetFallbacks: ['Октябрь-Ноябрь'],
   // Операционный лист склада (читаемо-записываемый для скрипта).
   targetSheet: 'FORONE_Остатки',
   // Журнал движений товара.
@@ -132,7 +135,12 @@ function doGet(e) {
     }
     if (!auth.ok) return json_({ ok: false, code: auth.code, message: auth.message });
 
-    if (action === 'stock') return json_(buildStockPayload_());
+    if (action === 'stock') {
+      // Каждая сверка телефона сначала подтягивает свежие данные из офисной таблицы.
+      var refresh = syncForoneStock();
+      if (!refresh.ok) return json_(refresh);
+      return json_(buildStockPayload_());
+    }
     if (action === 'operations') return json_(buildOperationsPayload_(params));
 
     return json_({
@@ -151,6 +159,7 @@ function doGet(e) {
       lastSyncCount: readProperty_('FORONE_LAST_COUNT', ''),
       operationsTotal: countRows_(getOrCreateSheet_(getForoneSpreadsheet_(), FORONE_CONFIG.operationsSheet)) - 1,
       openConflicts: countConflicts_(getOrCreateSheet_(getForoneSpreadsheet_(), FORONE_CONFIG.targetSheet)),
+      lastSourceSheet: readProperty_('FORONE_LAST_SOURCE_SHEET', ''),
       auth: { secretRequired: !!readProperty_('FORONE_SHARED_SECRET', ''), allowedUsers: (readProperty_('FORONE_ALLOWED_USERS', '') || '').split(',').filter(Boolean) }
     });
   } catch (error) {
@@ -204,6 +213,10 @@ function doPost(e) {
     if (ops.length > FORONE_CONFIG.maxBatch) {
       return json_({ ok: false, code: 'BATCH_TOO_LARGE', message: 'Слишком большой пакет: максимум ' + FORONE_CONFIG.maxBatch + ' операций' });
     }
+
+    // Перед приёмом операции обновляем снимок из офиса под уже взятым ScriptLock.
+    // Так проверка остатка не опирается на устаревшую копию.
+    syncForoneStockLocked_();
 
     var ss = getForoneSpreadsheet_();
     var stock = getOrCreateSheet_(ss, FORONE_CONFIG.targetSheet);
@@ -507,6 +520,7 @@ function buildStockPayload_() {
     ok: true,
     serverTime: nowIso_(),
     lastSync: readProperty_('FORONE_LAST_SYNC', ''),
+    sourceSheet: readProperty_('FORONE_LAST_SOURCE_SHEET', ''),
     count: products.length,
     products: products,
     conflicts: conflicts
@@ -582,41 +596,60 @@ function syncForoneStock(options) {
   if (!locked) return { ok: false, code: 'BUSY', message: 'Синхронизация уже выполняется' };
 
   try {
-    var ss = getForoneSpreadsheet_();
-    var target = getOrCreateSheet_(ss, FORONE_CONFIG.targetSheet);
-    var existing = readTargetRows_(target);
-    var source = readSourceIndex_(ss);
-    var plan = mergeStockPlan_(existing, source, nowIso_());
-
-    if (!opts.dryRun) writeStockRows_(target, plan.rows);
-    if (!opts.dryRun) recordConflicts_(ss, plan.conflicts);
-
-    var props = PropertiesService.getScriptProperties();
-    props.setProperties({
-      FORONE_LAST_SYNC: opts.dryRun ? (props.getProperty('FORONE_LAST_SYNC') || '') : nowIso_(),
-      FORONE_LAST_COUNT: String(plan.rows.length),
-      FORONE_LAST_CONFLICTS: String(plan.conflicts.length),
-      FORONE_LAST_ADDITIONS: String(plan.added),
-      FORONE_LAST_APPLIED_OPS: String(plan.appliedSourceChanges),
-      FORONE_LAST_RENAMED: String(plan.renamed)
-    });
-
-    return {
-      ok: true,
-      dryRun: !!opts.dryRun,
-      rows: plan.rows.length,
-      added: plan.added,
-      renamed: plan.renamed,
-      sourceChanges: plan.appliedSourceChanges,
-      conflicts: plan.conflicts,
-      serverTime: nowIso_()
-    };
+    return syncForoneStockLocked_(opts);
   } catch (error) {
     logError_('sync', null, null, null, null, 'SYNC_FAILED', error);
     throw error;
   } finally {
     try { lock.releaseLock(); } catch (ignored) {}
   }
+}
+
+/** Внутренний вариант для doPost: вызывается только пока ScriptLock уже удерживается. */
+function syncForoneStockLocked_(options) {
+  var opts = options || {};
+  var targetBook = getForoneSpreadsheet_();
+  var sourceBook = getSourceSpreadsheet_();
+  var selection = selectCurrentSourceSheet_(sourceBook, new Date());
+  if (!selection.sheet) {
+    throw new Error('Не найден лист-источник для текущего месяца. Нужен лист с текущим и предыдущим месяцем или с названием месяца и годом.');
+  }
+
+  var target = getOrCreateSheet_(targetBook, FORONE_CONFIG.targetSheet);
+  var existing = readTargetRows_(target);
+  var source = readSourceIndex_(selection.sheet);
+  if (!source.length) throw new Error('На листе «' + selection.name + '» не найдено товарных строк; рабочие остатки не изменены.');
+  var plan = mergeStockPlan_(existing, source, nowIso_());
+
+  if (!opts.dryRun) writeStockRows_(target, plan.rows);
+  if (!opts.dryRun) recordConflicts_(targetBook, plan.conflicts);
+
+  var props = PropertiesService.getScriptProperties();
+  props.setProperties({
+    FORONE_LAST_SYNC: opts.dryRun ? (props.getProperty('FORONE_LAST_SYNC') || '') : nowIso_(),
+    FORONE_LAST_COUNT: String(plan.rows.length),
+    FORONE_LAST_CONFLICTS: String(plan.conflicts.length),
+    FORONE_LAST_ADDITIONS: String(plan.added),
+    FORONE_LAST_APPLIED_OPS: String(plan.appliedSourceChanges),
+    FORONE_LAST_RENAMED: String(plan.renamed)
+  });
+  if (!opts.dryRun) {
+    props.setProperty('FORONE_LAST_SOURCE_SHEET', selection.name);
+    props.setProperty('FORONE_LAST_SOURCE_MODE', selection.mode);
+  }
+
+  return {
+    ok: true,
+    dryRun: !!opts.dryRun,
+    rows: plan.rows.length,
+    added: plan.added,
+    renamed: plan.renamed,
+    sourceChanges: plan.appliedSourceChanges,
+    sourceSheet: selection.name,
+    sourceMode: selection.mode,
+    conflicts: plan.conflicts,
+    serverTime: nowIso_()
+  };
 }
 
 /**
@@ -811,19 +844,84 @@ function recordConflicts_(ss, conflicts) {
 // ИМПОРТ ИЗ ИСХОДНЫХ ЛИСТОВ
 // ---------------------------------------------------------------------------
 
-function readSourceIndex_(ss) {
-  var items = [];
-  for (var s = 0; s < FORONE_CONFIG.sourceSheets.length; s += 1) {
-    var sheet = ss.getSheetByName(FORONE_CONFIG.sourceSheets[s]);
-    if (!sheet) continue;
-    var values = sheet.getDataRange().getValues();
-    var headerRow = findHeaderRow_(values);
-    if (headerRow < 0) continue;
-    var columns = mapColumns_(values[headerRow]);
-    for (var r = headerRow + 1; r < values.length; r += 1) {
-      var item = readSourceItem_(values[r], columns);
-      if (item && !isSummaryItem_(item)) items.push(item);
+var SOURCE_MONTH_ALIASES_ = [
+  ['январ', 'янв'], ['феврал', 'февр'], ['март', 'мар'], ['апрел', 'апр'],
+  ['май', 'мая'], ['июн'], ['июл'], ['август', 'авг'],
+  ['сентябр', 'сен'], ['октябр', 'окт'], ['ноябр', 'ноя'], ['декабр', 'дек']
+];
+
+/** Выбирает текущую вкладку по паре месяцев или по месяцу с явным годом. */
+function selectCurrentSourceSheet_(spreadsheet, date) {
+  var currentDate = date instanceof Date ? date : new Date();
+  var month = parseInt(Utilities.formatDate(currentDate, FORONE_CONFIG.timeZone, 'M'), 10) - 1;
+  var year = parseInt(Utilities.formatDate(currentDate, FORONE_CONFIG.timeZone, 'yyyy'), 10);
+  if (isNaN(month) || month < 0 || month > 11) month = currentDate.getMonth();
+  if (isNaN(year)) year = currentDate.getFullYear();
+  var previousMonth = (month + 11) % 12;
+  var sheets = spreadsheet.getSheets();
+  var best = null;
+  var bestScore = 0;
+
+  for (var i = 0; i < sheets.length; i += 1) {
+    var name = sheets[i].getName();
+    var normalizedName = normalize_(name);
+    if (!sheetHasMonth_(normalizedName, month)) continue;
+    var isPeriodPair = sheetHasMonth_(normalizedName, previousMonth);
+    var hasDigits = /\d/.test(name);
+    var yearMatches = sheetHasCurrentYear_(name, year, isPeriodPair);
+    var score = 0;
+    if (isPeriodPair && (!hasDigits || yearMatches)) score = 300 + (yearMatches ? 10 : 0);
+    else if (!isPeriodPair && yearMatches) score = 200;
+    if (score > bestScore) {
+      best = sheets[i];
+      bestScore = score;
     }
+  }
+  if (best) return { sheet: best, name: best.getName(), mode: 'calendar' };
+
+  var lastName = readProperty_('FORONE_LAST_SOURCE_SHEET', '');
+  var lastSheet = lastName ? spreadsheet.getSheetByName(lastName) : null;
+  if (lastSheet) return { sheet: lastSheet, name: lastName, mode: 'last-valid' };
+
+  var fallbacks = FORONE_CONFIG.sourceSheetFallbacks || [];
+  for (var f = 0; f < fallbacks.length; f += 1) {
+    var fallbackSheet = spreadsheet.getSheetByName(fallbacks[f]);
+    if (fallbackSheet) return { sheet: fallbackSheet, name: fallbacks[f], mode: 'configured-fallback' };
+  }
+  return { sheet: null, name: '', mode: 'missing', month: month, year: year };
+}
+
+function sheetHasMonth_(normalizedName, monthIndex) {
+  var aliases = SOURCE_MONTH_ALIASES_[monthIndex] || [];
+  for (var i = 0; i < aliases.length; i += 1) {
+    if (normalizedName.indexOf(normalize_(aliases[i])) >= 0) return true;
+  }
+  return false;
+}
+
+function sheetHasCurrentYear_(name, year, allowPreviousYear) {
+  var fullYears = String(name).match(/(?:19|20)\d{2}/g) || [];
+  var tokens = fullYears.length ? fullYears : (String(name).match(/\d{2}/g) || []);
+  var currentShort = year % 100;
+  var previousShort = (year - 1) % 100;
+  for (var i = 0; i < tokens.length; i += 1) {
+    var token = Number(tokens[i]);
+    if (token === year || (allowPreviousYear && token === year - 1)) return true;
+    if (!fullYears.length && (token === currentShort || (allowPreviousYear && token === previousShort))) return true;
+  }
+  return false;
+}
+
+function readSourceIndex_(sheet) {
+  var items = [];
+  if (!sheet) throw new Error('Лист-источник не передан в readSourceIndex_');
+  var values = sheet.getDataRange().getValues();
+  var headerRow = findHeaderRow_(values);
+  if (headerRow < 0) throw new Error('Не найдены заголовки товаров на листе «' + sheet.getName() + '»');
+  var columns = mapColumns_(values[headerRow]);
+  for (var r = headerRow + 1; r < values.length; r += 1) {
+    var item = readSourceItem_(values[r], columns);
+    if (item && !isSummaryItem_(item)) items.push(item);
   }
   return items;
 }
@@ -1026,6 +1124,20 @@ function appendErrorRow_(sheet, record) {
 
 /** Запустить один раз после вставки кода: создаёт листы, заголовки и триггер. */
 function FORONE_setup() {
+  var properties = PropertiesService.getScriptProperties();
+  var sourceId = text_(readProperty_('FORONE_SOURCE_SPREADSHEET_ID', ''));
+  if (!sourceId) throw new Error('Сначала добавьте Script Property FORONE_SOURCE_SPREADSHEET_ID — ID офисной таблицы для чтения');
+  // Привязанный проект открывают из рабочей копии. Запоминаем её ID до развёртывания Web App.
+  var active = SpreadsheetApp.getActiveSpreadsheet();
+  if (active && typeof active.getId === 'function') {
+    var activeId = text_(active.getId());
+    if (!activeId || activeId === sourceId || FORONE_PROTECTED_SPREADSHEET_IDS.indexOf(activeId) >= 0) {
+      throw new Error('Открыта не рабочая копия; настройка и запись остановлены');
+    }
+    properties.setProperty('FORONE_SPREADSHEET_ID', activeId);
+  }
+  // Проверяем ID и доступ к офисному источнику до любых записей в рабочую копию.
+  getSourceSpreadsheet_();
   var ss = getForoneSpreadsheet_();
   var target = getOrCreateSheet_(ss, FORONE_CONFIG.targetSheet);
   var journal = getOrCreateSheet_(ss, FORONE_CONFIG.operationsSheet);
@@ -1208,19 +1320,32 @@ function formatErrorSheet_(sheet) {
 // ---------------------------------------------------------------------------
 
 function getForoneSpreadsheet_() {
-  var id = getSpreadsheetId_();
-  if (id) return SpreadsheetApp.openById(id);
-  var active = SpreadsheetApp.getActiveSpreadsheet();
-  if (active) return active;
-  throw new Error('Не задан FORONE_SPREADSHEET_ID и нет активной таблицы');
+  return SpreadsheetApp.openById(getSpreadsheetId_());
+}
+
+/** Источник офисных данных открывается только для чтения; записи идут в рабочую копию. */
+function getSourceSpreadsheet_() {
+  var sourceId = text_(readProperty_('FORONE_SOURCE_SPREADSHEET_ID', ''));
+  if (!sourceId) throw new Error('Добавьте Script Property FORONE_SOURCE_SPREADSHEET_ID с ID офисной таблицы (источник только для чтения)');
+  if (sourceId === getSpreadsheetId_()) throw new Error('ID источника совпадает с рабочей копией; запись в источник запрещена');
+  if (FORONE_PROTECTED_SPREADSHEET_IDS.indexOf(sourceId) >= 0) throw new Error('Указан защищённый ID старой/исходной таблицы; настройте актуальный офисный источник');
+  return SpreadsheetApp.openById(sourceId);
 }
 
 function getSpreadsheetId_() {
   var configuredId = text_(readProperty_('FORONE_SPREADSHEET_ID', ''));
-  // При копировании проекта могли сохраниться свойства оригинала — никогда не
-  // разрешаем им перенаправить тестовую версию на production-таблицу.
-  if (configuredId && configuredId !== FORONE_PRODUCTION_SPREADSHEET_ID) return configuredId;
-  return text_(FORONE_SPREADSHEET_ID);
+  var sourceId = text_(readProperty_('FORONE_SOURCE_SPREADSHEET_ID', ''));
+  var active = SpreadsheetApp.getActiveSpreadsheet();
+  var activeId = active && typeof active.getId === 'function' ? text_(active.getId()) : '';
+  var id = activeId || configuredId;
+  if (!id) throw new Error('Не задан FORONE_SPREADSHEET_ID: сначала запустите FORONE_setup() из рабочей копии');
+  if (id === sourceId || FORONE_PROTECTED_SPREADSHEET_IDS.indexOf(id) >= 0) {
+    throw new Error('Целевая таблица совпадает с источником или защищённой старой таблицей; запись остановлена');
+  }
+  if (activeId && configuredId && configuredId !== activeId) {
+    try { console.warn('[FORONE] Унаследованный target ID проигнорирован; использована привязанная рабочая копия'); } catch (ignored) {}
+  }
+  return id;
 }
 
 function safeName_() {

@@ -117,6 +117,7 @@ class FakeSpreadsheet {
     this.sheets = new Map();
   }
   getName() { return this.name; }
+  getId() { return this.id; }
   getUrl() { return 'https://docs.google.com/spreadsheets/d/' + this.id; }
   getSheetByName(name) { return this.sheets.get(name) || null; }
   insertSheet(name) {
@@ -127,16 +128,29 @@ class FakeSpreadsheet {
   getSheets() { return Array.from(this.sheets.values()); }
 }
 
-function createEnvironment({ spreadsheetId = 'TEST_SHEET_ID', seed = {} } = {}) {
+function createEnvironment({
+  spreadsheetId = 'TEST_WORKING_COPY',
+  seed = {},
+  sourceSpreadsheetId = 'TEST_OFFICE_SOURCE',
+  sourceSeed = {},
+  activeSpreadsheet
+} = {}) {
   const registry = new Map();
-  const main = new FakeSpreadsheet(spreadsheetId);
+  const main = new FakeSpreadsheet(spreadsheetId, 'FORONE Stock Work TEST');
+  const source = new FakeSpreadsheet(sourceSpreadsheetId, 'Наличие Товара на Складе — офисный источник');
+  let currentActiveSpreadsheet = activeSpreadsheet === undefined ? main : activeSpreadsheet;
   registry.set(spreadsheetId, main);
-  Object.keys(seed).forEach((name) => {
-    const sheet = main.insertSheet(name);
-    (seed[name] || []).forEach((row, index) => row.forEach((value, col) => sheet.write(index + 1, col + 1, value)));
+  registry.set(sourceSpreadsheetId, source);
+  const seedSpreadsheet = (spreadsheet, sheets) => Object.keys(sheets).forEach((name) => {
+    const sheet = spreadsheet.insertSheet(name);
+    (sheets[name] || []).forEach((row, index) => row.forEach((value, col) => sheet.write(index + 1, col + 1, value)));
   });
+  seedSpreadsheet(main, seed);
+  seedSpreadsheet(source, sourceSeed);
 
   const properties = new Map();
+  properties.set('FORONE_SPREADSHEET_ID', spreadsheetId);
+  properties.set('FORONE_SOURCE_SPREADSHEET_ID', sourceSpreadsheetId);
   const scriptProperties = {
     getProperty: (key) => (properties.has(key) ? properties.get(key) : null),
     setProperty: (key, value) => { properties.set(key, String(value)); return scriptProperties; },
@@ -154,7 +168,7 @@ function createEnvironment({ spreadsheetId = 'TEST_SHEET_ID', seed = {} } = {}) 
         if (!registry.has(id)) throw new Error('Нет таблицы с ID ' + id);
         return registry.get(id);
       },
-      getActiveSpreadsheet: () => null
+      getActiveSpreadsheet: () => currentActiveSpreadsheet
     },
     LockService: {
       getScriptLock: () => ({
@@ -178,6 +192,8 @@ function createEnvironment({ spreadsheetId = 'TEST_SHEET_ID', seed = {} } = {}) 
       formatDate: (date, tz, pattern) => {
         const d = new Date(date);
         const pad = (n) => String(n).padStart(2, '0');
+        if (pattern === 'M') return String(d.getMonth() + 1);
+        if (pattern === 'yyyy') return String(d.getFullYear());
         return `${pad(d.getDate())}.${pad(d.getMonth() + 1)}.${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
       },
       getUuid: () => 'uuid-' + Math.random().toString(36).slice(2, 10)
@@ -200,12 +216,12 @@ function createEnvironment({ spreadsheetId = 'TEST_SHEET_ID', seed = {} } = {}) 
   });
 
   const context = vm.createContext(sandbox);
-  return { sandbox, context, registry, main, properties, logs };
+  return { sandbox, context, registry, main, source, properties, logs, setActiveSpreadsheet: (spreadsheet) => { currentActiveSpreadsheet = spreadsheet; } };
 }
 
 function loadScript(env, path) {
   const source = fs.readFileSync(path, 'utf8');
-  vm.runInContext(source + '\n;this.__script = { doGet, doPost, syncForoneStock, FORONE_setup, FORONE_selfTest, FORONE_dryRun, FORONE_ping, buildStockPayload_, mergeStockPlan_, validateOperation_, normalizeOperation_, collectOperations_, readTargetRows_, readSheetRows_, STOCK_HEADERS, OP_HEADERS, ERR_HEADERS, COL, newSet_, getForoneSpreadsheet_, getSpreadsheetId_ };', env.context, { filename: path });
+  vm.runInContext(source + '\n;this.__script = { doGet, doPost, syncForoneStock, syncForoneStockLocked_, FORONE_setup, FORONE_selfTest, FORONE_dryRun, FORONE_ping, buildStockPayload_, mergeStockPlan_, validateOperation_, normalizeOperation_, collectOperations_, readTargetRows_, readSheetRows_, selectCurrentSourceSheet_, getSourceSpreadsheet_, STOCK_HEADERS, OP_HEADERS, ERR_HEADERS, COL, newSet_, getForoneSpreadsheet_, getSpreadsheetId_ };', env.context, { filename: path });
   return env.context.__script;
 }
 

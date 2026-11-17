@@ -34,6 +34,7 @@ function makeHost(initialState) {
     element() { return null; },
     notify() {},
     updateConnectionLabel() {},
+    onStockUpdated() { host.stockUpdateEvents = (host.stockUpdateEvents || 0) + 1; },
     onSynced(item, result) { (host.syncedEvents = host.syncedEvents || []).push([item.operationId, result.stockAfter]); },
     onFlushed(info) { (host.flushEvents = host.flushEvents || []).push(info); }
   };
@@ -43,7 +44,12 @@ function makeHost(initialState) {
 function loadSync(options) {
   const opts = options || {};
   const sandbox = {
-    console, setTimeout, clearTimeout, setInterval, clearInterval, Date, Math, JSON, Number, String, Array, Object, Boolean, RegExp, Error, isNaN, isFinite, parseInt, parseFloat, Uint8Array, Promise,
+    console,
+    setTimeout: opts.setTimeout || setTimeout,
+    clearTimeout: opts.clearTimeout || clearTimeout,
+    setInterval: opts.setInterval || setInterval,
+    clearInterval: opts.clearInterval || clearInterval,
+    Date, Math, JSON, Number, String, Array, Object, Boolean, RegExp, Error, isNaN, isFinite, parseInt, parseFloat, Uint8Array, Promise,
     fetch: opts.fetch,
     localStorage: {
       data: {},
@@ -495,16 +501,16 @@ group('12. Проверка соединения и ручная загрузк�
   const { sync } = loadSync({
     fetch: (url, options) => {
       seen.push(url);
-      if (/action=ping/.test(url)) return jsonResponse({ ok: true, app: 'FORONE-SYNC', version: '2.0.0', sheets: { 'FORONE_Остатки': 3 }, serverTime: 'now' });
+      if (/action=ping/.test(url)) return jsonResponse({ ok: true, app: 'FORONE-SYNC', version: '2.1.0', sheets: { 'FORONE_Остатки': 3 }, serverTime: 'now' });
       return jsonResponse({ ok: true, count: 1, products: [{ sku: 'Н234-YP', name: 'Панель', category: 'Панель', length: 3000, stock: 28, reserve: 0, available: 28 }], conflicts: [{ sku: 'Н234-YP', note: 'Источник: 36 → 40' }] });
     }
   });
   const host = makeHost({ products: [{ id: 'p1', sku: 'Н234-YP', name: 'Панель', category: 'Панель', length: 3000, stock: 30, reserved: 0, retired: false }], operations: [], queue: [], sync: Object.assign({}, baseConfig, { autoSend: false }) });
   sync.attach(host);
   const ping = await sync.ping();
-  check('ping вернул версию сервера', ping.ok === true && ping.version === '2.0.0', ping);
+  check('ping вернул версию сервера', ping.ok === true && ping.version === '2.1.0', ping);
   check('ключ добавлен в запрос', /key=test-key/.test(seen[0]), seen[0]);
-  check('версия сервера сохранена в настройках', sync.config().serverVersion === '2.0.0');
+  check('версия сервера сохранена в настройках', sync.config().serverVersion === '2.1.0');
 
   const pull = await sync.pullStock({ silent: true });
   check('остатки загружены с сервера', pull.ok === true && host._state.products[0].stock === 28, pull);
@@ -542,3 +548,24 @@ setTimeout(() => {
   }
   process.exit(failed ? 1 : 0);
 }, 600);
+group('12б. Автообновление остатков при запуске приложения');
+(async () => {
+  const requests = [];
+  let heartbeat = null;
+  const { sync } = loadSync({
+    setInterval: (callback) => { heartbeat = callback; return 1; },
+    clearInterval: () => {},
+    fetch: (url) => {
+      requests.push(url);
+      return jsonResponse({ ok: true, sourceSheet: 'Октябрь-Ноябрь', products: [{ sku: 'Н234-YP', name: 'Панель', category: 'Панель', length: 3000, stock: 25, reserve: 0, available: 25 }], conflicts: [] });
+    }
+  });
+  const host = makeHost({ products: [{ id: 'p1', sku: 'Н234-YP', name: 'Панель', category: 'Панель', length: 3000, stock: 20, reserved: 0, retired: false }], operations: [], queue: [], sync: Object.assign({}, baseConfig, { enabled: true }) });
+  sync.attach(host);
+  const initialPull = await sync.startTimers();
+  check('при запуске включённого приложения выполнен GET action=stock', requests.length === 1 && /action=stock/.test(requests[0]), requests);
+  check('стартовый pull обновил локальный остаток', initialPull.ok && host._state.products[0].stock === 25, initialPull);
+  check('после изменения каталога вызван callback перерисовки', host.stockUpdateEvents === 1, host.stockUpdateEvents);
+  heartbeat();
+  check('минутный heartbeat не повторяет GET до истечения 15 минут', requests.length === 1, requests.length);
+})();

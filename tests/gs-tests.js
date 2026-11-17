@@ -10,9 +10,11 @@ const path = require('path');
 const { createEnvironment, loadScript, postEvent, getEvent, parseOutput } = require('./gs-harness');
 
 const GS = path.join(__dirname, '..', 'FORONE_Sync_v2.gs');
-const SHEET_ID = 'TEST_SHEET_ID';
-const TEST_COPY_ID = '1kD4H7rZ1y5AYi3eEszBZU4-j8_mrj_hcT2WtXB77PK8';
+const TEST_COPY_ID = 'TEST_WORKING_COPY';
+const SHEET_ID = TEST_COPY_ID;
+const SOURCE_ID = 'TEST_OFFICE_SOURCE';
 const PRODUCTION_ID = '1fanDUGGwc8rioi5cnkE1Xydpv3r1pq9L755YztUmLCQ';
+const LEGACY_COPY_ID = '1kD4H7rZ1y5AYi3eEszBZU4-j8_mrj_hcT2WtXB77PK8';
 
 let passed = 0;
 let failed = 0;
@@ -42,10 +44,12 @@ function defaultSource() {
 
 function makeApp(options) {
   const opts = options || {};
-  const seed = { 'Октябрь-Ноябрь': opts.sourceRows || defaultSource() };
-  if (opts.presetTarget) seed['FORONE_Остатки'] = opts.presetTarget;
-  const env = createEnvironment({ spreadsheetId: SHEET_ID, seed });
+  const targetSeed = {};
+  if (opts.presetTarget) targetSeed['FORONE_Остатки'] = opts.presetTarget;
+  const sourceSeed = { 'Октябрь-Ноябрь': opts.sourceRows || defaultSource() };
+  const env = createEnvironment({ spreadsheetId: SHEET_ID, seed: targetSeed, sourceSpreadsheetId: SOURCE_ID, sourceSeed });
   env.properties.set('FORONE_SPREADSHEET_ID', SHEET_ID);
+  env.properties.set('FORONE_SOURCE_SPREADSHEET_ID', SOURCE_ID);
   if (opts.sharedSecret) env.properties.set('FORONE_SHARED_SECRET', opts.sharedSecret);
   if (opts.allowedUsers) env.properties.set('FORONE_ALLOWED_USERS', opts.allowedUsers);
   const api = loadScript(env, GS);
@@ -102,9 +106,74 @@ function errorRows(sheet) {
 group('0. Изоляция тестовой копии от исходной таблицы');
 {
   const env = createEnvironment({ spreadsheetId: SHEET_ID });
-  env.properties.set('FORONE_SPREADSHEET_ID', PRODUCTION_ID);
   const api = loadScript(env, GS);
-  check('унаследованный ID исходной таблицы игнорируется', api.getSpreadsheetId_() === TEST_COPY_ID, api.getSpreadsheetId_());
+  [PRODUCTION_ID, SOURCE_ID, LEGACY_COPY_ID, 'UNEXPECTED_SHEET_ID'].forEach((unsafeId) => {
+    env.properties.set('FORONE_SPREADSHEET_ID', unsafeId);
+    check('чужой ID не перенаправляет запись: ' + unsafeId, api.getSpreadsheetId_() === TEST_COPY_ID, api.getSpreadsheetId_());
+  });
+  env.properties.set('FORONE_SPREADSHEET_ID', TEST_COPY_ID);
+  check('целевая таблица — именно новая рабочая копия', api.getForoneSpreadsheet_() === env.main);
+  check('источник офисных данных открыт отдельно и только для чтения', api.getSourceSpreadsheet_() === env.source && env.source !== env.main);
+  env.properties.set('FORONE_SOURCE_SPREADSHEET_ID', TEST_COPY_ID);
+  let sameSourceRejected = false;
+  try { api.getSourceSpreadsheet_(); } catch (error) { sameSourceRejected = /совпадает с источником/.test(error.message); }
+  check('совпадение ID источника и копии блокируется', sameSourceRejected);
+  const missingSourceEnv = createEnvironment({ spreadsheetId: 'TEST_NO_SOURCE_COPY' });
+  missingSourceEnv.properties.delete('FORONE_SOURCE_SPREADSHEET_ID');
+  const missingSourceApi = loadScript(missingSourceEnv, GS);
+  let missingSourceRejected = false;
+  try { missingSourceApi.FORONE_setup(); } catch (error) { missingSourceRejected = /FORONE_SOURCE_SPREADSHEET_ID/.test(error.message); }
+  check('без source ID setup останавливается до создания листов', missingSourceRejected && missingSourceEnv.main.getSheets().length === 0);
+  const noActiveEnv = createEnvironment({ activeSpreadsheet: null });
+  const noActiveApi = loadScript(noActiveEnv, GS);
+  const protectedRejected = [PRODUCTION_ID, LEGACY_COPY_ID, SOURCE_ID].every((id) => {
+    noActiveEnv.properties.set('FORONE_SPREADSHEET_ID', id);
+    try { noActiveApi.getSpreadsheetId_(); return false; } catch (error) { return true; }
+  });
+  check('Web App без активной книги блокирует офисный и старый target ID', protectedRejected);
+  const boundEnv = createEnvironment({
+    spreadsheetId: 'TEST_BOUND_TARGET',
+    sourceSpreadsheetId: 'TEST_BOUND_SOURCE',
+    sourceSeed: { 'Октябрь-Ноябрь': [['Артикул', 'Название', 'Категория', 'Длина', 'Остаток на складе'], ['SKU-BOUND', 'Панель тест', 'Панель', 3000, 5]] }
+  });
+  boundEnv.properties.set('FORONE_SPREADSHEET_ID', 'TEST_INHERITED_TARGET');
+  const boundApi = loadScript(boundEnv, GS);
+  boundApi.FORONE_setup();
+  const targetCaptured = boundEnv.properties.get('FORONE_SPREADSHEET_ID') === 'TEST_BOUND_TARGET';
+  boundEnv.setActiveSpreadsheet(null);
+  check('setup фиксирует связанный target для Web App без active spreadsheet', targetCaptured && boundApi.getSpreadsheetId_() === 'TEST_BOUND_TARGET' && boundApi.getSourceSpreadsheet_() === boundEnv.source);
+}
+
+group('0б. Выбор текущей месячной вкладки и безопасный fallback');
+{
+  const app = makeApp();
+  const sourceBook = app.env.source;
+  app.env.properties.set('FORONE_LAST_SOURCE_SHEET', 'Октябрь-Ноябрь');
+  sourceBook.insertSheet('Декабрь'); // архивная вкладка без года и без пары месяцев
+  const nov = app.api.selectCurrentSourceSheet_(sourceBook, new Date('2026-11-17T12:00:00Z'));
+  check('17.11.2026 автоматически выбирается вкладка Октябрь-Ноябрь', nov.name === 'Октябрь-Ноябрь' && nov.mode === 'calendar', nov);
+  const decBeforeTab = app.api.selectCurrentSourceSheet_(sourceBook, new Date('2026-12-01T12:00:00Z'));
+  check('архивный лист Декабрь не выбран без года или пары', decBeforeTab.name === 'Октябрь-Ноябрь' && decBeforeTab.mode === 'last-valid', decBeforeTab);
+  sourceBook.insertSheet('Ноябрь-Декабрь');
+  const dec = app.api.selectCurrentSourceSheet_(sourceBook, new Date('2026-12-01T12:00:00Z'));
+  check('при появлении Ноябрь-Декабрь скрипт переключается автоматически', dec.name === 'Ноябрь-Декабрь' && dec.mode === 'calendar', dec);
+  sourceBook.insertSheet('Декабрь-Январь 2027');
+  const jan = app.api.selectCurrentSourceSheet_(sourceBook, new Date('2027-01-05T12:00:00Z'));
+  check('для января 2027 выбирается Декабрь-Январь 2027', jan.name === 'Декабрь-Январь 2027' && jan.mode === 'calendar', jan);
+}
+
+group('0в. GET и POST обновляют рабочую копию из офисного источника');
+{
+  const app = makeApp();
+  const source = app.env.source.getSheetByName('Октябрь-Ноябрь');
+  const originalRow = rowIndexFor(source, 'Н234-YP');
+  source.getRange(originalRow, 5).setValue(40);
+  const stock = parseOutput(app.api.doGet(getEvent({ action: 'stock' })));
+  check('GET stock сначала импортировал новое значение офиса', Number(rowOf(app.target(), 'Н234-YP')[4]) === 40 && stock.sourceSheet === 'Октябрь-Ноябрь', stock);
+  check('GET stock не изменил офисный источник', Number(source.getRange(originalRow, 5).getValue()) === 40);
+  const result = post(app.api, [op({ operationId: 'fresh-before-post', qty: 5 })]);
+  check('POST перед операцией обновил базу и списал из актуального остатка', result.results[0].stockAfter === 35 && Number(rowOf(app.target(), 'Н234-YP')[4]) === 35, result.results[0]);
+  check('журнал операции создан только в рабочей копии', app.journal().getLastRow() === 2 && app.env.source.getSheetByName('FORONE_Операции') === null);
 }
 
 // ===========================================================================
@@ -254,7 +323,7 @@ group('7. Слияние с исходным листом: ручные движ
   check('импорт без изменений источника сохранил 32', Number(rowOf(app.target(), 'Н234-YP')[4]) === 32, rowOf(app.target(), 'Н234-YP')[4]);
   check('ложное расхождение не появилось', String(rowOf(app.target(), 'Н234-YP')[14] || '') === '', rowOf(app.target(), 'Н234-YP')[14]);
 
-  const source = app.env.main.getSheetByName('Октябрь-Ноябрь');
+  const source = app.env.source.getSheetByName('Октябрь-Ноябрь');
   source.getRange(rowIndexFor(source, 'Н234-YP'), 5).setValue(40);
   const merged = app.api.syncForoneStock();
   const row = rowOf(app.target(), 'Н234-YP');
@@ -296,7 +365,7 @@ group('7. Слияние с исходным листом: ручные движ
 
   const gone = makeApp();
   gone.post_out = post(gone.api, [op({ operationId: 'gone-1', sku: 'К01-206N', qty: 3 })]);
-  const goneSource = gone.env.main.getSheetByName('Октябрь-Ноябрь');
+  const goneSource = gone.env.source.getSheetByName('Октябрь-Ноябрь');
   goneSource.getRange(rowIndexFor(goneSource, 'К01-206N'), 1).setValue('');
   gone.api.syncForoneStock();
   const orphan = rowOf(gone.target(), 'К01-206N');
@@ -339,7 +408,7 @@ group('7b. Дубли одного артикула и переименован�
   ];
   const ren = makeApp({ sourceRows: renameSource });
   post(ren.api, [op({ operationId: 'ren-1', sku: 'Н318-SM', type: 'out', qty: 4 })]);
-  const rsource = ren.env.main.getSheetByName('Октябрь-Ноябрь');
+  const rsource = ren.env.source.getSheetByName('Октябрь-Ноябрь');
   rsource.getRange(rowIndexFor(rsource, 'Н318-SM'), 2).setValue('Панель Smoky Grey 2.0');
   const renameResult = ren.api.syncForoneStock();
   const renamedRow = rowOf(ren.target(), 'Н318-SM');
@@ -420,7 +489,7 @@ group('10. Проверка соединения (doGet ping)');
   const app = makeApp();
   post(app.api, [op({ operationId: 'p1', qty: 1, type: 'in' })]);
   const ping = parseOutput(app.api.doGet(getEvent({ action: 'ping' })));
-  check('ping отвечает ok и версией', ping.ok === true && ping.version === '2.0.0', ping.version);
+  check('ping отвечает ok и версией', ping.ok === true && ping.version === '2.1.0', ping.version);
   check('ping показывает количество строк листов', ping.sheets['FORONE_Остатки'] === 3 && ping.sheets['FORONE_Операции'] === 1, ping.sheets);
   check('ping отдаёт время последней синхронизации', !!ping.lastSync);
   check('ping сообщает ID и URL таблицы', ping.spreadsheet.id === SHEET_ID && /docs\.google\.com/.test(ping.spreadsheet.url), ping.spreadsheet);

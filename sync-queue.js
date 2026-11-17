@@ -56,6 +56,9 @@
 
   var host = null;
   var sending = false;
+  var pullingStock = false;
+  var lastAutoPullAttempt = 0;
+  var STOCK_PULL_INTERVAL = 15 * 60 * 1000;
   var flushTimer = null;
   var heartbeatTimer = null;
 
@@ -384,6 +387,7 @@
   // -------------------------------------------------- отправка
 
   function request(url, options) {
+    if (typeof fetch !== 'function') return Promise.reject(new Error('Fetch API недоступен'));
     var controller = typeof root.AbortController === 'function' ? new root.AbortController() : null;
     var timer = controller ? setTimeout(function () { controller.abort(); }, REQUEST_TIMEOUT) : null;
     var settings = Object.assign({}, options);
@@ -670,6 +674,9 @@
     var url = normalizeUrl(cfg.url);
     if (!url || !cfg.key) return Promise.resolve({ ok: false, message: 'Не задан URL или ключ' });
     if (!isOnline()) return Promise.resolve({ ok: false, message: 'Нет интернета' });
+    if (pullingStock) return Promise.resolve({ ok: false, busy: true, message: 'Сверка уже выполняется' });
+    pullingStock = true;
+    lastAutoPullAttempt = now();
     var query = '?action=stock&key=' + encodeURIComponent(cfg.key);
     return request(url + query, { method: 'GET', mode: 'cors', credentials: 'omit', redirect: 'follow', cache: 'no-store' })
       .then(function (outcome) {
@@ -685,10 +692,30 @@
         var merged = mergeServerStock(host.state(), parsed.products || [], pendingProjections());
         if (!opts.silent || merged.changed) save();
         render();
+        if (merged.changed && host.onStockUpdated) host.onStockUpdated(merged);
         return Object.assign({ ok: true }, merged, { conflicts: cfgAfter.lastConflicts });
+      }).catch(function () {
+        return { ok: false, message: 'Не удалось получить остатки с сервера' };
+      }).then(function (result) {
+        pullingStock = false;
+        return result;
       }, function () {
+        pullingStock = false;
         return { ok: false, message: 'Не удалось получить остатки с сервера' };
       });
+  }
+
+  function maybePullStock(force) {
+    var cfg = config();
+    if (!cfg.enabled || !normalizeUrl(cfg.url) || !cfg.key || !isOnline() || typeof fetch !== 'function') {
+      return Promise.resolve({ ok: false, skipped: true });
+    }
+    if (pullingStock) return Promise.resolve({ ok: false, skipped: true, busy: true });
+    var lastPull = Math.max(Number(cfg.lastPull) || 0, lastAutoPullAttempt || 0);
+    if (!force && lastPull && now() - lastPull < STOCK_PULL_INTERVAL) {
+      return Promise.resolve({ ok: true, skipped: true });
+    }
+    return pullStock({ silent: true });
   }
 
   /**
@@ -923,16 +950,24 @@
       var cfg = config();
       if (!cfg.enabled) return;
       if (isOnline() && queue().length) flush('heartbeat');
+      maybePullStock(false);
       render();
     }, 60000);
 
     if (root.addEventListener) {
-      root.addEventListener('online', function () { schedule(1500); render(); });
+      root.addEventListener('online', function () { schedule(1500); maybePullStock(true); render(); });
       root.addEventListener('offline', render);
-      root.addEventListener('visibilitychange', function () {
-        if (root.document && root.document.visibilityState === 'visible') { schedule(800); render(); }
-      });
     }
+    var onVisible = function () {
+      if (root.document && root.document.visibilityState === 'visible') {
+        schedule(800);
+        maybePullStock(true);
+        render();
+      }
+    };
+    if (root.document && root.document.addEventListener) root.document.addEventListener('visibilitychange', onVisible);
+    else if (root.addEventListener) root.addEventListener('visibilitychange', onVisible);
+    return maybePullStock(true);
   }
 
   function updateSettings(patch) {
@@ -943,6 +978,7 @@
     save();
     render();
     if (state.sync.enabled && state.sync.autoSend) schedule(400);
+    if (state.sync.enabled) maybePullStock(true);
     return state.sync;
   }
 

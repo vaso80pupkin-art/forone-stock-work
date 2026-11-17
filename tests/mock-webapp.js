@@ -11,7 +11,8 @@ const path = require('path');
 const { createEnvironment, loadScript } = require('./gs-harness');
 
 const PORT = Number(process.argv[2] || 8099);
-const SHEET_ID = 'MOCK_SHEET';
+const SHEET_ID = 'MOCK_WORKING_COPY';
+const SOURCE_ID = 'MOCK_OFFICE_SOURCE';
 const SECRET = 'dev-secret-2026';
 
 const SOURCE = [
@@ -23,7 +24,7 @@ const SOURCE = [
   ['ПР-40-WH', 'Профиль завершающий White', 'Профиль', '3000', 0]
 ];
 
-const env = createEnvironment({ spreadsheetId: SHEET_ID, seed: { 'Октябрь-Ноябрь': SOURCE } });
+const env = createEnvironment({ spreadsheetId: SHEET_ID, sourceSpreadsheetId: SOURCE_ID, sourceSeed: { 'Октябрь-Ноябрь': SOURCE } });
 env.properties.set('FORONE_SPREADSHEET_ID', SHEET_ID);
 env.properties.set('FORONE_SHARED_SECRET', SECRET);
 const api = loadScript(env, path.join(__dirname, '..', 'FORONE_Sync_v2.gs'));
@@ -31,8 +32,8 @@ api.FORONE_setup();
 
 const chaos = { failNext: 0, failMode: 'html' };
 
-function sheetRows(name, width) {
-  const sheet = env.main.getSheetByName(name);
+function sheetRows(name, width, spreadsheet = env.main) {
+  const sheet = spreadsheet.getSheetByName(name);
   if (!sheet) return [];
   return sheet.getDataRange().getValues().map((row) => row.slice(0, width));
 }
@@ -59,7 +60,7 @@ const server = http.createServer((req, res) => {
   if (url.pathname === '/__journal') return send(res, 200, JSON.stringify(sheetRows('FORONE_Операции', 14), null, 1));
   if (url.pathname === '/__stock') return send(res, 200, JSON.stringify(sheetRows('FORONE_Остатки', 15), null, 1));
   if (url.pathname === '/__errors') return send(res, 200, JSON.stringify(sheetRows('FORONE_Ошибки', 9), null, 1));
-  if (url.pathname === '/__source') return send(res, 200, JSON.stringify(sheetRows('Октябрь-Ноябрь', 5), null, 1));
+  if (url.pathname === '/__source') return send(res, 200, JSON.stringify(sheetRows('Октябрь-Ноябрь', 5, env.source), null, 1));
   if (url.pathname === '/__chaos') {
     if (url.searchParams.get('fail')) chaos.failNext = Number(url.searchParams.get('fail'));
     if (url.searchParams.get('mode')) chaos.failMode = url.searchParams.get('mode');
@@ -67,12 +68,12 @@ const server = http.createServer((req, res) => {
     if (url.searchParams.get('sync') === '1') return send(res, 200, JSON.stringify(api.syncForoneStock(), null, 1));
     if (url.searchParams.get('addSku')) {
       const parts = url.searchParams.get('addSku').split('|');
-      env.main.getSheetByName('Октябрь-Ноябрь').appendRow(parts);
+      env.source.getSheetByName('Октябрь-Ноябрь').appendRow(parts);
       return send(res, 200, JSON.stringify({ ok: true, row: parts }));
     }
     if (url.searchParams.get('setSource')) {
       const pair = url.searchParams.get('setSource').split('=');
-      const sheet = env.main.getSheetByName('Октябрь-Ноябрь');
+      const sheet = env.source.getSheetByName('Октябрь-Ноябрь');
       const rows = sheet.getDataRange().getValues();
       const index = rows.findIndex((row) => String(row[0]).trim() === pair[0]);
       if (index >= 0) sheet.getRange(index + 1, 5).setValue(Number(pair[1]));

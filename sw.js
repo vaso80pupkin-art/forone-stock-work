@@ -8,7 +8,7 @@
  *  · запросы к Google (импорт и Web App) проходят напрямую, мы их не кэшируем:
  *    остатки должны быть свежими, а не вчерашними.
  */
-const CACHE_NAME = 'forone-stock-work-v24';
+const CACHE_NAME = 'forone-stock-work-v25';
 const APP_SHELL = [
   './', './index.html', './styles.css', './app.js', './sync-queue.js', './visual-recognition.js',
   './manifest.json', './manus-routes.json', './vendor/html5-qrcode.min.js', './vendor/xlsx.full.min.js'
