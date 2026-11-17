@@ -40,7 +40,7 @@
 // НАСТРОЙКИ
 // ---------------------------------------------------------------------------
 
-// ID офисного источника и рабочей копии задаются приватно в Script Properties.
+// ID офисного источника задаётся приватно; защищённые старые таблицы запрещены как write target.
 var FORONE_PROTECTED_SPREADSHEET_IDS = [
   '1fanDUGGwc8rioi5cnkE1Xydpv3r1pq9L755YztUmLCQ',
   '1kD4H7rZ1y5AYi3eEszBZU4-j8_mrj_hcT2WtXB77PK8'
@@ -1174,6 +1174,31 @@ function FORONE_setup() {
   return result;
 }
 
+/** Одноразовая первичная настройка через owner-only Apps Script API execution. */
+function FORONE_configureFromApi(sourceId, targetId, sharedSecret) {
+  sourceId = text_(sourceId);
+  targetId = text_(targetId);
+  sharedSecret = text_(sharedSecret);
+  if (!sourceId || !targetId || !sharedSecret || sharedSecret.length < 32) {
+    throw new Error('Нужны source ID, target ID и случайный ключ длиной не менее 32 символов');
+  }
+  if (sourceId === targetId) throw new Error('Источник и рабочая копия должны быть разными таблицами');
+  if (FORONE_PROTECTED_SPREADSHEET_IDS.indexOf(targetId) >= 0) {
+    throw new Error('Защищённая исходная/старая таблица не может быть рабочей копией');
+  }
+  var active = SpreadsheetApp.getActiveSpreadsheet();
+  if (active && typeof active.getId === 'function' && text_(active.getId()) !== targetId) {
+    throw new Error('Apps Script привязан не к указанной рабочей копии');
+  }
+  SpreadsheetApp.openById(sourceId);
+  SpreadsheetApp.openById(targetId);
+  var properties = PropertiesService.getScriptProperties();
+  properties.setProperty('FORONE_SOURCE_SPREADSHEET_ID', sourceId);
+  properties.setProperty('FORONE_SPREADSHEET_ID', targetId);
+  properties.setProperty('FORONE_SHARED_SECRET', sharedSecret);
+  return FORONE_setup();
+}
+
 /** Быстрая проверка связи прямо в редакторе: вывести ответ doGet. */
 function FORONE_ping() {
   Logger.log(JSON.stringify({
@@ -1328,7 +1353,8 @@ function getSourceSpreadsheet_() {
   var sourceId = text_(readProperty_('FORONE_SOURCE_SPREADSHEET_ID', ''));
   if (!sourceId) throw new Error('Добавьте Script Property FORONE_SOURCE_SPREADSHEET_ID с ID офисной таблицы (источник только для чтения)');
   if (sourceId === getSpreadsheetId_()) throw new Error('ID источника совпадает с рабочей копией; запись в источник запрещена');
-  if (FORONE_PROTECTED_SPREADSHEET_IDS.indexOf(sourceId) >= 0) throw new Error('Указан защищённый ID старой/исходной таблицы; настройте актуальный офисный источник');
+  // Защищённая старая книга может быть явно задана как read-only источник;
+  // getSpreadsheetId_ и FORONE_setup по-прежнему запрещают её как цель записи.
   return SpreadsheetApp.openById(sourceId);
 }
 

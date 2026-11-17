@@ -114,6 +114,9 @@ group('0. Изоляция тестовой копии от исходной т�
   env.properties.set('FORONE_SPREADSHEET_ID', TEST_COPY_ID);
   check('целевая таблица — именно новая рабочая копия', api.getForoneSpreadsheet_() === env.main);
   check('источник офисных данных открыт отдельно и только для чтения', api.getSourceSpreadsheet_() === env.source && env.source !== env.main);
+  const protectedSourceEnv = createEnvironment({ spreadsheetId: 'TEST_SOURCE_ONLY_TARGET', sourceSpreadsheetId: PRODUCTION_ID });
+  const protectedSourceApi = loadScript(protectedSourceEnv, GS);
+  check('защищённая офисная книга допускается только как read-only source', protectedSourceApi.getSourceSpreadsheet_() === protectedSourceEnv.source && protectedSourceApi.getForoneSpreadsheet_() === protectedSourceEnv.main);
   env.properties.set('FORONE_SOURCE_SPREADSHEET_ID', TEST_COPY_ID);
   let sameSourceRejected = false;
   try { api.getSourceSpreadsheet_(); } catch (error) { sameSourceRejected = /совпадает с источником/.test(error.message); }

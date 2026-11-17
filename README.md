@@ -76,7 +76,7 @@ python3 -m http.server 8080
 
 ```bash
 cd tests
-node gs-tests.js      # серверная логика Apps Script: 141 проверка
+node gs-tests.js      # серверная логика Apps Script: 142 проверки
 node sync-tests.js    # клиентская очередь и автообновление остатков: 113 проверок
 node mock-webapp.js 8099   # учебный Web App для сквозной проверки без Google
 ```

@@ -4,12 +4,12 @@
 
 ```bash
 cd tests
-node gs-tests.js        # 141 проверка Apps Script
+node gs-tests.js        # 142 проверки Apps Script
 node sync-tests.js      # 113 проверок клиента и автообновления
 node mock-webapp.js 8099 # учебный Web App на реальном коде .gs
 ```
 
-Итого: 254 автоматические проверки.
+Итого: 255 автоматических проверок.
 
 ## `gs-harness.js` — эмулятор Google Apps Script
 
