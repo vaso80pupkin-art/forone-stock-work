@@ -41,6 +41,7 @@ let catalogFilters = { length: 'all', availability: 'all', status: 'active' };
 let cameraZoom = 1;
 let enhanceCamera = true;
 let pendingImport = null;
+let operationLock = false;
 
 function applyTheme(theme = activeTheme) {
   activeTheme = theme === 'light' ? 'light' : 'dark';
@@ -74,6 +75,9 @@ function loadState() {
     const stored = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null');
     if (stored && Array.isArray(stored.products) && Array.isArray(stored.operations)) {
       stored.products = stored.products.map((product) => ({ warehouse: 'Алматы', zone: '', rack: '', bin: '', reserved: 0, ...product, reserved: Math.min(Math.max(0, Number(product.reserved) || 0), Math.max(0, Number(product.stock) || 0)) }));
+      stored.operations = (stored.operations || []).map((operation) => ({ ...operation, syncStatus: operation.syncStatus || 'local' }));
+      if (!Array.isArray(stored.queue)) stored.queue = [];
+      stored.sync = stored.sync || {};
       stored.source = { googleUrl: DEFAULT_GOOGLE_SHEET_URL, googleEnabled: true, googleSheet: DEFAULT_GOOGLE_SHEET_NAME, googleLastSync: 0, googleLastFetch: 0, googleAutoConfigured: false, ...(stored.source || {}) };
       if (stored.source.googleUrl.includes('1AZnORUbYuI-C3Kv4f3Absh3dGRJ6XQFavi0il4_Tk-c')) stored.source.googleUrl = DEFAULT_GOOGLE_SHEET_URL;
       if (stored.source.googleSheet === 'Октябрь-Ноябрь') stored.source.googleSheet = DEFAULT_GOOGLE_SHEET_NAME;
@@ -83,7 +87,7 @@ function loadState() {
   } catch (error) {
     console.warn('Не удалось прочитать локальную базу', error);
   }
-  return { products: seedProducts.map((product) => ({ ...product, reserved: 0, warehouse: 'Алматы', zone: '', rack: '', bin: '' })), operations: [], activeView: 'scanner', source: { googleUrl: DEFAULT_GOOGLE_SHEET_URL, googleEnabled: true, googleSheet: DEFAULT_GOOGLE_SHEET_NAME, googleLastSync: 0, googleLastFetch: 0, googleAutoConfigured: true } };
+  return { products: seedProducts.map((product) => ({ ...product, reserved: 0, warehouse: 'Алматы', zone: '', rack: '', bin: '' })), operations: [], queue: [], sync: {}, activeView: 'scanner', source: { googleUrl: DEFAULT_GOOGLE_SHEET_URL, googleEnabled: true, googleSheet: DEFAULT_GOOGLE_SHEET_NAME, googleLastSync: 0, googleLastFetch: 0, googleAutoConfigured: true } };
 }
 
 function saveState() {
@@ -144,6 +148,10 @@ function updateConnectionLabel() {
   if (!saved) {
     label.textContent = navigator.onLine ? 'Онлайн · сохранение ещё не создано' : 'Офлайн · проверьте сохранение';
     return;
+  }
+  if (window.FORONESync) {
+    const summary = FORONESync.summary();
+    if (summary.enabled && summary.pendingTotal) { label.textContent = `Ожидает отправки: ${summary.pendingTotal}`; return; }
   }
   const googleSync = state.source?.googleEnabled;
   if (googleSync && state.source?.googleLastSync) {
@@ -209,11 +217,28 @@ function openDashboardFilter(filter) {
   renderCatalog();
 }
 
+function operationSyncBlock(operation) {
+  const item = window.FORONESync ? FORONESync.findItem(operation.id) : null;
+  const statusKey = operation.syncStatus || 'local';
+  const status = window.FORONESync ? FORONESync.statusInfo(statusKey) : { short: '—', tone: 'muted', label: 'Статус неизвестен' };
+  const detail = item && item.lastError ? item.lastError : status.label;
+  const actions = [];
+  if (item && item.status === 'error') actions.push(`<button class="op-action" type="button" data-op-action="retry" data-op-id="${escapeHtml(operation.id)}">↻ Повторить</button>`);
+  if (item && item.status === 'rejected') {
+    actions.push(`<button class="op-action" type="button" data-op-action="retry" data-op-id="${escapeHtml(operation.id)}">↻ Отправить снова</button>`);
+    actions.push(`<button class="op-action op-action-danger" type="button" data-op-action="discard" data-op-id="${escapeHtml(operation.id)}">Убрать</button>`);
+  }
+  if (item && (item.status === 'queued' || item.status === 'error')) actions.push(`<button class="op-action" type="button" data-op-action="cancel" data-op-id="${escapeHtml(operation.id)}">✕ Отменить</button>`);
+  if (!item && statusKey === 'synced') actions.push(`<button class="op-action" type="button" data-op-action="revert" data-op-id="${escapeHtml(operation.id)}">↩ Вернуть товар</button>`);
+  const attempts = item && item.attempts ? `<small class="op-attempt">попыток: ${item.attempts}</small>` : '';
+  return `<div class="operation-sync"><span class="op-status op-status-${status.tone}" title="${escapeHtml(detail)}">${escapeHtml(status.short)}</span>${actions.length ? `<div class="op-actions">${actions.join('')}</div>` : ''}${attempts}${item && item.lastError ? `<small class="op-error-text">${escapeHtml(item.lastError)}</small>` : ''}</div>`;
+}
+
 function operationRow(operation) {
   const isIncoming = operation.type === 'in';
   return `<div class="operation-row ${isIncoming ? 'op-in' : operation.type === 'out' ? 'op-out' : 'op-writeoff'}">
     <div class="operation-mark">${operationIcons[operation.type]}</div>
-    <div class="operation-info"><div class="operation-code">${escapeHtml(operation.sku)}</div><div class="operation-desc">${escapeHtml(operation.name)} · ${operationLabels[operation.type]}${operation.comment ? ` · ${escapeHtml(operation.comment)}` : ''}</div></div>
+    <div class="operation-info"><div class="operation-code">${escapeHtml(operation.sku)}</div><div class="operation-desc">${escapeHtml(operation.name)} · ${operationLabels[operation.type]}${operation.comment ? ` · ${escapeHtml(operation.comment)}` : ''}</div>${operationSyncBlock(operation)}</div>
     <div class="operation-amount"><strong class="${isIncoming ? 'amount-plus' : 'amount-minus'}">${isIncoming ? '+' : '−'}${operation.qty}</strong><span>${formatDate(operation.createdAt, true)}</span></div>
   </div>`;
 }
@@ -269,6 +294,7 @@ function renderReports() {
   $('#reportUnitsCount').textContent = units;
   const operations = [...state.operations].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
   $('#operationsList').innerHTML = operations.length ? operations.map(operationRow).join('') : `<div class="empty-state"><div class="empty-icon">◒</div><strong>Журнал чист</strong>Добавленные приход, расход и списание появятся здесь.</div>`;
+  if (window.FORONESync) FORONESync.render();
 }
 
 function renderAll() {
@@ -374,14 +400,84 @@ function addOperationFromModal() {
     showToast(`Недостаточно остатка: доступно ${getAvailable(product)} шт.`, 'error');
     return;
   }
+  if (operationLock) { showToast('Уже обрабатывается — подождите секунду', 'error'); return; }
+  operationLock = true;
+  setTimeout(() => { operationLock = false; }, 600);
+  const submitButton = $('#addOperationBtn');
+  if (submitButton) { submitButton.disabled = true; submitButton.classList.add('is-busy'); }
+
   captureUndo();
   product.stock = Math.max(0, Number(product.stock || 0) + (type === 'in' ? qty : -qty));
   product.updatedAt = Date.now();
-  state.operations.push({ id: `op-${Date.now()}`, productId: product.id, sku: product.sku, name: product.name, category: product.category, length: product.length, qty, type, comment, createdAt: new Date().toISOString(), stockAfter: product.stock });
+  const operation = { id: FORONESync.makeOperationId(), productId: product.id, sku: product.sku, name: product.name, category: product.category, length: product.length, qty, type, comment, createdAt: new Date().toISOString(), stockAfter: product.stock, syncStatus: 'local' };
+  state.operations.push(operation);
   saveState();
   closeBackdrop('modalBackdrop');
   renderAll();
-  showToast(`${operationLabels[type]} добавлен: ${product.sku}`, 'success', true);
+  FORONESync.enqueue(operation);
+  const syncSummary = FORONESync.summary();
+  const suffix = !syncSummary.enabled ? ' · сохранено локально' : syncSummary.waiting ? ` · в очереди: ${syncSummary.waiting}` : ' · отправляем…';
+  showToast(`${operationLabels[type]} добавлен: ${product.sku}${suffix}`, 'success', true);
+}
+
+function handleOperationAction(event) {
+  const button = event.target.closest('[data-op-action]');
+  if (!button) return;
+  const id = button.dataset.opId;
+  const action = button.dataset.opAction;
+  if (action === 'retry') {
+    button.disabled = true;
+    button.textContent = 'Отправляем…';
+    Promise.resolve(FORONESync.retryItem(id)).then(() => renderAll());
+    return;
+  }
+  if (action === 'discard') {
+    if (!confirm('Убрать эту операцию из очереди? В Google Таблицу она не попадёт.')) return;
+    FORONESync.discard(id);
+    renderAll();
+    showToast('Операция убрана из очереди');
+    return;
+  }
+  if (action === 'cancel') { cancelOperation(id); return; }
+  if (action === 'revert') { revertOperation(id); }
+}
+
+function cancelOperation(id) {
+  const operation = state.operations.find((item) => item.id === id);
+  const item = FORONESync.findItem(id);
+  if (!operation || !item) return;
+  if (!confirm('Отменить операцию и вернуть количество на склад? В Google Таблицу она не уйдёт.')) return;
+  captureUndo();
+  FORONESync.cancelQueued(id);
+  const product = getProduct(operation.productId) || state.products.find((candidate) => candidate.sku === operation.sku);
+  if (product) {
+    product.stock = Math.max(0, Number(product.stock || 0) + (operation.type === 'in' ? -operation.qty : operation.qty));
+    product.updatedAt = Date.now();
+  }
+  state.operations = state.operations.filter((candidate) => candidate.id !== id);
+  saveState();
+  renderAll();
+  showToast(`Операция ${operation.sku} отменена, остаток возвращён`, 'success', true);
+}
+
+function revertOperation(id) {
+  const operation = state.operations.find((item) => item.id === id);
+  if (!operation) return;
+  if (!confirm(`Вернуть ${operation.qty} шт. ${operation.sku} на склад? Будет создана обратная операция.`)) return;
+  const product = getProduct(operation.productId) || state.products.find((candidate) => candidate.sku === operation.sku);
+  if (!product) { showToast('Позиция не найдена в каталоге', 'error'); return; }
+  const reverse = FORONESync.reversePayload({ operationId: operation.id, sku: product.sku, name: product.name, category: product.category, type: operation.type, qty: operation.qty, comment: operation.comment || '' });
+  captureUndo();
+  const incoming = reverse.type === 'in';
+  if (!incoming && operation.qty > getAvailable(product)) { showToast(`Нельзя вернуть: доступно ${getAvailable(product)} шт.`, 'error'); return; }
+  product.stock = Math.max(0, Number(product.stock || 0) + (incoming ? reverse.qty : -reverse.qty));
+  product.updatedAt = Date.now();
+  const record = { id: reverse.operationId, productId: product.id, sku: product.sku, name: product.name, category: product.category, length: product.length, qty: reverse.qty, type: reverse.type, comment: reverse.comment, createdAt: reverse.createdAt, stockAfter: product.stock, syncStatus: 'local' };
+  state.operations.push(record);
+  saveState();
+  renderAll();
+  FORONESync.enqueue(record);
+  showToast(`Возврат оформлен: ${product.sku} +${reverse.qty}`, 'success', true);
 }
 
 function openEditor(productId = null) {
@@ -823,6 +919,61 @@ function inspectInventorySheet(sheet) {
 }
 
 function getGoogleSheetId(value) { const match = String(value || '').match(/spreadsheets\/d\/([a-zA-Z0-9-_]+)/); return match ? match[1] : ''; }
+function updateSyncSettingsUI() {
+  const cfg = FORONESync.config();
+  const set = (id, value) => { const element = $(id); if (element) element.value = value === undefined || value === null ? '' : value; };
+  const mark = (id, value) => { const element = $(id); if (element) element.checked = Boolean(value); };
+  set('#syncUrl', cfg.url); set('#syncKey', cfg.key); set('#syncUser', cfg.user); set('#syncDeviceLabel', cfg.deviceLabel);
+  mark('#syncEnabled', cfg.enabled); mark('#syncAutoSend', cfg.autoSend !== false); mark('#syncPullAfterSend', cfg.pullAfterSend !== false);
+  FORONESync.render();
+  const conflicts = $('#syncConflicts');
+  if (conflicts) {
+    const list = cfg.lastConflicts || [];
+    conflicts.classList.toggle('hidden', !list.length);
+    conflicts.innerHTML = list.length ? `<b>Расхождения с источником (${list.length})</b>` + list.slice(0, 6).map((item) => `<div class="sync-conflict-row"><span>${escapeHtml(item.sku)}</span><small>${escapeHtml(item.note)}</small></div>`).join('') + (list.length > 6 ? `<small class="sync-conflict-more">и ещё ${list.length - 6}…</small>` : '') : '';
+  }
+  const test = $('#syncTestStatus');
+  if (test && !test.dataset.pinned) test.textContent = cfg.lastErrorText && cfg.lastError && !cfg.lastPing ? cfg.lastErrorText : (cfg.lastPing ? `Проверено ${FORONESync.formatAgo(cfg.lastPing)}` : 'Соединение не проверялось');
+}
+
+async function testSyncConnection() {
+  const status = $('#syncTestStatus');
+  if (status) { status.dataset.pinned = '1'; status.textContent = 'Проверяю соединение…'; }
+  const result = await FORONESync.ping();
+  if (status) {
+    status.textContent = result.ok
+      ? (result.restricted ? 'Связь есть · вставьте ключ доступа' : `Связь есть · Web App v${result.version || '?'}${result.sheets ? ' · позиций ' + (result.sheets[DEFAULT_GOOGLE_SHEET_NAME] ?? '—') : ''}`)
+      : (result.message || 'Связи нет');
+    setTimeout(() => { delete status.dataset.pinned; updateSyncSettingsUI(); }, 12000);
+  }
+  showToast(result.ok ? 'Соединение с Web App установлено' : result.message || 'Не удалось связаться с Web App', result.ok ? 'success' : 'error');
+}
+
+async function pullServerStock(manual = true) {
+  const result = await FORONESync.pullStock({ silent: !manual });
+  if (manual) {
+    if (result.ok) showToast(`Сверка с сервером: обновлено ${result.changed}, добавлено ${result.added}, переименовано ${result.renamed || 0}, защищено ${result.skipped}`);
+    else showToast(result.message || 'Сверка не удалась', 'error');
+    renderAll();
+  }
+  updateSyncSettingsUI();
+  return result;
+}
+
+async function sendQueueNow() {
+  const summary = FORONESync.summary();
+  if (!summary.configured) { showToast('Укажите URL Web App и включите двустороннюю синхронизацию', 'error'); return; }
+  if (!summary.total && !summary.unsynced) { showToast('Очередь пуста — отправлять нечего'); return; }
+  const status = $('#syncTestStatus');
+  if (status) { status.dataset.pinned = '1'; status.textContent = 'Отправляем операции…'; }
+  const result = await FORONESync.retryNow();
+  if (result && result.ok) showToast(`Отправлено операций: ${result.applied || 0}`);
+  else if (result && result.skipped) showToast('Отправлять нечего — очередь пуста');
+  else if (result && result.message) showToast(result.message, 'error');
+  if (status) setTimeout(() => { delete status.dataset.pinned; updateSyncSettingsUI(); }, 10000);
+  renderAll();
+}
+
 function updateGoogleSyncUI() {
   const source = state.source || {};
   const url = $('#googleSheetUrl');
@@ -843,6 +994,7 @@ function updateGoogleSyncUI() {
   if (count) count.textContent = source.googleLastCount || (synced ? state.products.filter((product) => !product.retired).length : '—');
   if (sheet) sheet.textContent = source.googleSheet || '—';
   if (status) status.textContent = synced ? `Последнее применение: ${formatDate(source.googleLastSync, true)} · лист «${source.googleSheet || 'не выбран'}»` : loaded ? `Книга загружена: ${formatDate(source.googleLastFetch, true)} · ожидает подтверждения` : source.googleEnabled ? 'Автосинхронизация включена · первая загрузка ожидается' : 'Источник не подключён';
+  updateSyncSettingsUI();
 }
 function googleCandidateSort(a, b) { const excluded = /заказ|статист|аналит|отгруз|брак|цены|ассортимент|исток|факт|лист/i; const preferred = /остат|налич|октябрь|ноябрь|декабрь|сентябрь|август|июль|июнь|май|март|февраль|новая/i; const exact = (state.source?.googleSheet && a.name.trim() === state.source.googleSheet) ? -1000 : 0; const ax = excluded.test(a.name) ? 100 : 0, bx = excluded.test(b.name) ? 100 : 0; const ap = preferred.test(a.name) ? -20 : 0, bp = preferred.test(b.name) ? -20 : 0; return (exact + ax + ap + a.order / 10000) - (bx + bp + b.order / 10000); }
 function openImportPreviewForCandidates(candidates, source = 'excel') { pendingImport = { candidates, source }; const options = candidates.slice(0, 20).map((candidate, index) => `<option value="${index}">${escapeHtml(candidate.name)} · ${candidate.rows.length} строк</option>`).join(''); $('#importPreviewContent').innerHTML = `<label class="field-label">Лист с остатками<select id="previewSheetSelect" class="preview-select">${options}</select></label><div id="importPreviewStats" class="import-preview-stats"></div><div class="import-preview-table-wrap"><table class="import-preview-table"><thead><tr><th>Артикул</th><th>Категория</th><th>Название</th><th>Остаток</th></tr></thead><tbody id="importPreviewRows"></tbody></table></div>`; $('#previewSheetSelect').addEventListener('change', renderImportPreviewDetails); const preferredIndex = Math.max(0, candidates.findIndex((candidate) => state.source?.googleSheet && candidate.name.trim() === state.source.googleSheet)); $('#previewSheetSelect').value = String(preferredIndex); renderImportPreviewDetails(); openBackdrop('importPreviewModal'); }
@@ -866,9 +1018,9 @@ function renderImportPreviewDetails() {
   $('#importPreviewRows').innerHTML = preview.slice(0, 30).map((item) => `<tr><td>${escapeHtml(item.sku)}</td><td>${escapeHtml(item.category)}</td><td>${escapeHtml(item.name)}</td><td>${item.stock}</td></tr>`).join('');
 }
 function confirmImport() {
-  if (!pendingImport) return; const rows = getImportRows(); let imported = 0; const batch = Date.now();
-  rows.forEach((row, index) => { if (isSummaryRow(row)) return; const sku = String(readRowValue(row, ['Артикул','SKU','Код','Article','Номенклатура','COLOR NO.']) || '').trim(); if (!sku) return; const name = String(readRowValue(row, ['Название','Наименование','Товар','Name','PRODUCT NAME','Описание']) || sku).trim(); const category = parseImportedCategory(readRowValue(row, ['Категория','Тип','Category']) || name); const length = parseImportedLength(readRowValue(row, ['Длина','Размер','Length']) || name); const stock = parseImportedStock(readRowValue(row, ['Остаток','Остаток на складе','Количество','Кол-во','Stock','Qty','Алматы в наличии'])); const reserved = Math.min(stock, parseImportedStock(readRowValue(row, ['Зарезервировано','Резерв','Reserved']))); const warehouse = String(readRowValue(row, ['Склад','Warehouse']) || 'Алматы').trim(); const zone = String(readRowValue(row, ['Зона','Zone']) || '').trim(); const rack = String(readRowValue(row, ['Стеллаж','Rack']) || '').trim(); const bin = String(readRowValue(row, ['Ячейка','Bin','Cell']) || '').trim(); const existing = state.products.find((product) => sameImportedProduct(product, sku, category, name)); const data = { name, category, length, stock, reserved, warehouse, zone, rack, bin, barcode: sku, retired: false, updatedAt: Date.now() }; if (existing) Object.assign(existing, data); else state.products.push({ id: `p-${batch}-${index}`, sku, reserved: 0, warehouse: 'Алматы', zone: '', rack: '', bin: '', orderOnly: length >= 4000, ...data }); imported++; });
-  const importSource = pendingImport.source; if (importSource === 'google') { state.source = state.source || {}; state.source.googleSheet = $('#previewSheetSelect')?.selectedOptions?.[0]?.textContent?.split(' · ')[0] || state.source.googleSheet; state.source.googleLastSync = Date.now(); state.source.googleLastCount = state.products.filter((product) => !product.retired).length; state.source.googleApproved = true; } saveState(); closeBackdrop('importPreviewModal'); pendingImport = null; renderAll(); updateGoogleSyncUI(); showToast(`${importSource === 'google' ? 'Синхронизация' : 'Импорт'} завершён: ${imported} позиций`);
+  if (!pendingImport) return; const rows = getImportRows(); let imported = 0; let protectedCount = 0; const batch = Date.now();
+  rows.forEach((row, index) => { if (isSummaryRow(row)) return; const sku = String(readRowValue(row, ['Артикул','SKU','Код','Article','Номенклатура','COLOR NO.']) || '').trim(); if (!sku) return; const name = String(readRowValue(row, ['Название','Наименование','Товар','Name','PRODUCT NAME','Описание']) || sku).trim(); const category = parseImportedCategory(readRowValue(row, ['Категория','Тип','Category']) || name); const length = parseImportedLength(readRowValue(row, ['Длина','Размер','Length']) || name); const stock = parseImportedStock(readRowValue(row, ['Остаток','Остаток на складе','Количество','Кол-во','Stock','Qty','Алматы в наличии'])); const reserved = Math.min(stock, parseImportedStock(readRowValue(row, ['Зарезервировано','Резерв','Reserved']))); const warehouse = String(readRowValue(row, ['Склад','Warehouse']) || 'Алматы').trim(); const zone = String(readRowValue(row, ['Зона','Zone']) || '').trim(); const rack = String(readRowValue(row, ['Стеллаж','Rack']) || '').trim(); const bin = String(readRowValue(row, ['Ячейка','Bin','Cell']) || '').trim(); const existing = state.products.find((product) => sameImportedProduct(product, sku, category, name)); const data = { name, category, length, stock, reserved, warehouse, zone, rack, bin, barcode: sku, retired: false, updatedAt: Date.now() }; const protect = existing && window.FORONESync && FORONESync.hasPendingFor(existing); if (protect) { delete data.stock; delete data.reserved; protectedCount++; } if (existing) Object.assign(existing, data); else state.products.push({ id: `p-${batch}-${index}`, sku, reserved: 0, warehouse: 'Алматы', zone: '', rack: '', bin: '', orderOnly: length >= 4000, ...data }); imported++; });
+  const importSource = pendingImport.source; if (importSource === 'google') { state.source = state.source || {}; state.source.googleSheet = $('#previewSheetSelect')?.selectedOptions?.[0]?.textContent?.split(' · ')[0] || state.source.googleSheet; state.source.googleLastSync = Date.now(); state.source.googleLastCount = state.products.filter((product) => !product.retired).length; state.source.googleApproved = true; } saveState(); closeBackdrop('importPreviewModal'); pendingImport = null; renderAll(); updateGoogleSyncUI(); showToast(`${importSource === 'google' ? 'Синхронизация' : 'Импорт'} завершён: ${imported} позиций${protectedCount ? ` · ${protectedCount} с неотправленным расходом не тронуты` : ''}`);
 }
 function exportExcel() {
   if (!window.XLSX) { showToast('SheetJS не загрузился', 'error'); return; }
@@ -888,9 +1040,14 @@ function exportExcel() {
 
 function clearOperations() {
   if (!state.operations.length) return showToast('Журнал уже пуст');
-  if (!confirm('Очистить все операции текущей смены? Остатки каталога не изменятся.')) return;
+  const unsent = state.operations.filter((operation) => operation.syncStatus && operation.syncStatus !== 'synced');
+  const pendingQueue = FORONESync.queue().length;
+  if (unsent.length || pendingQueue) {
+    if (!confirm(`В журнале есть неотправленные операции (${Math.max(unsent.length, pendingQueue)}). Очистить журнал И отменить их отправку? Остатки каталога не изменятся.`)) return;
+    state.queue = [];
+  } else if (!confirm('Очистить все операции текущей смены? Остатки каталога не изменятся.')) return;
   state.operations = [];
-  saveState(); renderAll(); showToast('Журнал очищен');
+  saveState(); renderAll(); FORONESync.render(); showToast('Журнал очищен');
 }
 
 
@@ -910,6 +1067,13 @@ const buttonHelpById = {
   clearOperationsBtn: 'Удалить журнал операций текущей смены',
   syncGoogleBtn: 'Загрузить остатки из Google Таблицы сейчас',
   openBackupBtn: 'Открыть сохранение и перенос резервной копии',
+  queuePill: 'Неотправленные операции — открыть настройки синхронизации',
+  syncTestBtn: 'Проверить, отвечает ли Google Apps Script Web App',
+  syncSendNowBtn: 'Отправить все операции из очереди в Google Таблицу',
+  syncPullBtn: 'Загрузить рабочие остатки с сервера и сверить с телефоном',
+  syncBackfillBtn: 'Поставить в очередь операции смены, которые ещё не отправлены',
+  queueSendNow: 'Отправить неотправленные операции сейчас',
+  queueOpenSettings: 'Открыть настройки синхронизации',
   themeToggleBtn: 'Переключить светлую и тёмную тему',
   backupSaveBtn: 'Скачать полную базу на телефон',
   backupRestoreBtn: 'Восстановить базу из JSON-файла',
@@ -1002,6 +1166,36 @@ function initEvents() {
   $('#confirmImportBtn').addEventListener('click', confirmImport); $('#closeImportPreview').addEventListener('click', () => closeBackdrop('importPreviewModal')); $('#cancelImportBtn').addEventListener('click', () => closeBackdrop('importPreviewModal'));
   $('#exportBtn').addEventListener('click', exportExcel);
   $('#clearOperationsBtn').addEventListener('click', clearOperations);
+  $('#operationsList').addEventListener('click', handleOperationAction);
+  $('#recentList').addEventListener('click', handleOperationAction);
+  $('#queuePill')?.addEventListener('click', () => { updateGoogleSyncUI(); openBackdrop('infoModal'); });
+  $('#queueSendNow')?.addEventListener('click', sendQueueNow);
+  $('#queueOpenSettings')?.addEventListener('click', () => { updateGoogleSyncUI(); openBackdrop('infoModal'); });
+  $('#syncEnabled')?.addEventListener('change', (event) => {
+    const cfg = FORONESync.updateSettings({ enabled: event.target.checked });
+    if (event.target.checked && !FORONESync.normalizeUrl(cfg.url)) showToast('Вставьте URL Web App — без него отправка невозможна', 'error');
+    else if (event.target.checked) { showToast('Двусторонняя синхронизация включена'); FORONESync.retryNow(); }
+    else showToast('Отправка операций выключена — они остаются на телефоне');
+    updateConnectionLabel();
+  });
+  $('#syncAutoSend')?.addEventListener('change', (event) => { FORONESync.updateSettings({ autoSend: event.target.checked }); if (event.target.checked) FORONESync.retryNow(); });
+  $('#syncPullAfterSend')?.addEventListener('change', (event) => FORONESync.updateSettings({ pullAfterSend: event.target.checked }));
+  $('#syncUrl')?.addEventListener('change', (event) => FORONESync.updateSettings({ url: event.target.value }));
+  $('#syncKey')?.addEventListener('change', (event) => FORONESync.updateSettings({ key: event.target.value.trim() }));
+  $('#syncUser')?.addEventListener('change', (event) => FORONESync.updateSettings({ user: event.target.value.trim() }));
+  $('#syncDeviceLabel')?.addEventListener('change', (event) => FORONESync.updateSettings({ deviceLabel: event.target.value.trim() }));
+  $('#syncTestBtn')?.addEventListener('click', testSyncConnection);
+  $('#syncSendNowBtn')?.addEventListener('click', sendQueueNow);
+  $('#syncPullBtn')?.addEventListener('click', () => pullServerStock(true));
+  $('#syncBackfillBtn')?.addEventListener('click', () => {
+    const count = FORONESync.unsyncedShiftOperations().length;
+    if (!count) return showToast('Все операции смены уже в очереди или отправлены');
+    if (!confirm(`Поставить в очередь ${count} ${pluralize(count, 'операцию', 'операции', 'операций')} за смену? Если проводили что-то в таблице вручную — эти операции отправлять не нужно.`)) return;
+    const added = FORONESync.enqueueAllUnsynced();
+    showToast(`В очередь добавлено: ${added}`);
+    FORONESync.retryNow();
+    renderAll();
+  });
   $('#openSettingsBtn').addEventListener('click', () => { updateGoogleSyncUI(); openBackdrop('infoModal'); }); $('#openHelpBtn').addEventListener('click', () => { closeBackdrop('infoModal'); openBackdrop('helpModal'); }); $$('[data-close-help]').forEach((button) => button.addEventListener('click', () => closeBackdrop('helpModal'))); $('#syncGoogleBtn').addEventListener('click', () => syncGoogleSheet(true)); $('#googleAutoSync').addEventListener('change', (event) => { state.source.googleEnabled = event.target.checked; state.source.googleAutoConfigured = true; state.source.googleUrl = $('#googleSheetUrl').value.trim() || DEFAULT_GOOGLE_SHEET_URL; saveState(); updateConnectionLabel(); if (event.target.checked) syncGoogleSheet(false); }); $('#googleSheetUrl').addEventListener('change', (event) => { state.source.googleUrl = event.target.value.trim() || DEFAULT_GOOGLE_SHEET_URL; saveState(); }); $('#openBackupBtn').addEventListener('click', () => { closeBackdrop('infoModal'); openBackdrop('backupModal'); }); $('[data-close-backup]').addEventListener('click', () => closeBackdrop('backupModal')); $('#backupSaveBtn').addEventListener('click', saveBackup); $('#backupRestoreBtn').addEventListener('click', () => $('#backupFileInput').click()); $('#backupShareBtn').addEventListener('click', shareBackup); $('#backupFileInput').addEventListener('change', (event) => { restoreBackup(event.target.files[0]); event.target.value = ''; });
   $$('[data-close-modal]').forEach((button) => button.addEventListener('click', () => closeBackdrop('modalBackdrop')));
   $$('[data-close-editor]').forEach((button) => button.addEventListener('click', () => closeBackdrop('editorModal')));
@@ -1012,11 +1206,40 @@ function initEvents() {
   window.addEventListener('offline', updateConnectionLabel);
 }
 
+function initSyncModule() {
+  if (!window.FORONESync) return;
+  FORONESync.attach({
+    state: () => state,
+    save: () => { try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch (error) { console.warn('Не удалось сохранить базу', error); } },
+    element: (selector) => document.querySelector(selector),
+    notify: (message, tone) => showToast(message, tone),
+    updateConnectionLabel,
+    onSynced(item, result) {
+      // Артикул в базе FORONE повторяется, поэтому позицию ищем по артикулу + названию + категории.
+      const product = FORONESync.resolveProduct(item);
+      if (!product) { showToast(`Сервер принял ${item.sku}, но позицию не удалось сопоставить — сверьте остатки`, 'error'); return; }
+      if (result.stockAfter !== undefined && result.stockAfter !== null) product.stock = Math.max(0, Number(result.stockAfter));
+      if (result.availableAfter !== undefined && result.availableAfter !== null) product.reserved = Math.max(0, Number(product.stock) - Number(result.availableAfter));
+      product.updatedAt = Date.now();
+    },
+    onFlushed(info) {
+      if (info.problems && info.problems.length) showToast(`Склад отклонил операций: ${info.problems.length} — откройте журнал`, 'error');
+      if (info.failed) showToast(`Отправка не прошла: ${info.message}. Пробуем снова, операции сохранены на телефоне.`, 'error');
+      renderAll();
+    }
+  });
+  FORONESync.startTimers();
+  FORONESync.render();
+  const summary = FORONESync.summary();
+  if (summary.enabled && summary.autoSend && summary.waiting) FORONESync.schedule(4000);
+}
+
 function registerOfflineApp() {
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js').catch((error) => console.warn('SW registration failed', error));
 }
 
 initEvents();
+initSyncModule();
 renderAll();
 registerOfflineApp();
 updateGoogleSyncUI();

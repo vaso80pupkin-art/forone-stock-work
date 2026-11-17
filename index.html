@@ -20,7 +20,12 @@
           <div class="brand-caption">STOCK CONTROL · ALMATY</div>
         </div>
       </div>
-      <div class="connection-pill"><span class="connection-dot"></span><span id="connectionLabel">Офлайн готов</span></div>
+      <div class="topbar-actions">
+        <button class="queue-pill hidden" id="queuePill" type="button" data-tooltip="Неотправленные операции — откройте настройки синхронизации">
+          <span class="queue-pill-dot" aria-hidden="true"></span><span id="queuePillCount">0</span><small>к отправке</small>
+        </button>
+        <div class="connection-pill"><span class="connection-dot"></span><span id="connectionLabel">Офлайн готов</span></div>
+      </div>
     </header>
 
     <main class="main-content">
@@ -101,6 +106,14 @@
         </div>
         <div class="report-hero"><div><span class="hero-kicker">SHIFT SUMMARY</span><h2><span id="reportItemsCount">0</span> позиций<br /><em>собрано сегодня</em></h2></div><div class="report-total"><span>Итого, шт.</span><strong id="reportUnitsCount">0</strong></div></div>
         <div class="report-actions"><button class="secondary-action" id="importBtn"><span>⇣</span><span>Импорт базы<br /><b>.XLSX</b></span></button><button class="primary-action" id="exportBtn"><span>⇡</span><span>Скачать отчет<br /><b>.XLSX</b></span></button><input id="fileInput" type="file" accept=".xlsx,.xls" hidden /></div>
+        <div class="queue-banner hidden" id="queueBanner" role="status">
+          <span class="queue-banner-icon" aria-hidden="true">⇡</span>
+          <p class="queue-banner-text" id="queueBannerText">Операции ждут отправки</p>
+          <div class="queue-banner-actions">
+            <button class="mini-button" type="button" id="queueSendNow">Отправить</button>
+            <button class="mini-button" type="button" id="queueOpenSettings">Настроить</button>
+          </div>
+        </div>
         <div class="section-heading compact-heading"><div><p class="eyebrow">Журнал движения</p><h2>Операции за смену</h2></div><button class="text-button danger-text" id="clearOperationsBtn">Очистить</button></div>
         <div class="operations-list" id="operationsList"></div>
       </section>
@@ -157,7 +170,34 @@
   </div>
 
   <div class="modal-backdrop hidden" id="infoModal" aria-hidden="true">
-    <div class="modal-sheet info-sheet" role="dialog" aria-modal="true" aria-labelledby="infoTitle"><div class="modal-handle"></div><button class="modal-close" data-close-info aria-label="Закрыть">×</button><div class="info-logo">F<span>/</span>O</div><p class="eyebrow">FORONE.KZ · STOCK CONTROL</p><h2 id="infoTitle">Склад всегда под рукой.</h2><p class="modal-copy">Работает офлайн, сохраняет данные на этом устройстве и помогает быстро проверить остатки в Алматы.</p><div class="info-list"><div><span>⌁</span><p><b>Автосохранение</b><small>Каталог и смена в localStorage</small></p></div><div><span>◈</span><p><b>Статусы в цвете</b><small>Много, мало, нет и спецзаказ</small></p></div><div><span>⇄</span><p><b>Excel</b><small>Импорт базы и отчет .xlsx</small></p></div></div><div class="google-sync-card"><p class="eyebrow">Статус синхронизации</p><div class="sync-status-panel"><div class="sync-status-main"><span class="sync-status-dot" id="googleSyncDot"></span><strong id="googleSyncState">Проверка источника…</strong></div><div class="sync-status-grid"><div><span>Последнее обновление</span><b id="googleSyncLastUpdate">—</b></div><div><span>Загружено позиций</span><b id="googleSyncCount">—</b></div><div><span>Активный лист</span><b id="googleSyncSheet">—</b></div></div></div><p class="eyebrow sync-source-label">Источник остатков</p><label class="toggle-field"><span>Автоматически обновлять из Google Sheets</span><span class="switch"><input id="googleAutoSync" type="checkbox" /><i></i></span></label><input id="googleSheetUrl" class="google-sheet-url" type="url" placeholder="Ссылка на Google-таблицу" /><div class="google-sync-row"><button class="secondary-action" id="syncGoogleBtn">Обновить сейчас</button><small id="googleSyncStatus">Источник не подключён</small></div></div><button class="primary-action full-width" id="openHelpBtn">Как работать с программой</button><button class="secondary-action full-width" id="openBackupBtn">Резервная копия и перенос базы</button><button class="secondary-action full-width" data-close-info>Понятно</button></div>
+    <div class="modal-sheet info-sheet" role="dialog" aria-modal="true" aria-labelledby="infoTitle"><div class="modal-handle"></div><button class="modal-close" data-close-info aria-label="Закрыть">×</button><div class="info-logo">F<span>/</span>O</div><p class="eyebrow">FORONE.KZ · STOCK CONTROL</p><h2 id="infoTitle">Склад всегда под рукой.</h2><p class="modal-copy">Работает офлайн, сохраняет данные на этом устройстве и помогает быстро проверить остатки в Алматы.</p><div class="info-list"><div><span>⌁</span><p><b>Автосохранение</b><small>Каталог и смена в localStorage</small></p></div><div><span>◈</span><p><b>Статусы в цвете</b><small>Много, мало, нет и спецзаказ</small></p></div><div><span>⇄</span><p><b>Excel</b><small>Импорт базы и отчет .xlsx</small></p></div></div><div class="google-sync-card"><p class="eyebrow">Чтение остатков из Google Таблицы (импорт)</p><div class="sync-status-panel"><div class="sync-status-main"><span class="sync-status-dot" id="googleSyncDot"></span><strong id="googleSyncState">Проверка источника…</strong></div><div class="sync-status-grid"><div><span>Последнее обновление</span><b id="googleSyncLastUpdate">—</b></div><div><span>Загружено позиций</span><b id="googleSyncCount">—</b></div><div><span>Активный лист</span><b id="googleSyncSheet">—</b></div></div></div><p class="eyebrow sync-source-label">Источник остатков</p><label class="toggle-field"><span>Автоматически загружать остатки (только чтение)</span><span class="switch"><input id="googleAutoSync" type="checkbox" /><i></i></span></label><input id="googleSheetUrl" class="google-sheet-url" type="url" placeholder="Ссылка на Google-таблицу" /><div class="google-sync-row"><button class="secondary-action" id="syncGoogleBtn">Загрузить остатки</button><small id="googleSyncStatus">Источник не подключён</small></div></div><div class="google-sync-card twoway-card">
+              <p class="eyebrow">Отправка операций в Google Sheets (запись) · сборка 2.0</p>
+              <div class="sync-status-panel">
+                <div class="sync-status-main"><span class="sync-status-dot is-off" id="syncTwoWayDot"></span><strong id="syncTwoWayState">Двусторонняя синхронизация выключена</strong></div>
+                <div class="sync-status-grid sync-grid-6">
+                  <div><span>В очереди</span><b id="syncQueueCount">0</b></div>
+                  <div><span>С ошибкой</span><b id="syncQueueErrors">0</b></div>
+                  <div><span>Последняя отправка</span><b id="syncLastSuccess">—</b></div>
+                  <div><span>Последняя ошибка</span><b id="syncLastError">—</b></div>
+                  <div><span>Web App</span><b id="syncServerVersion">—</b></div>
+                  <div><span>Сверка остатков</span><b id="syncLastPull">—</b></div>
+                </div>
+              </div>
+              <div class="sync-conflicts hidden" id="syncConflicts"></div>
+              <label class="toggle-field"><span>Двусторонняя синхронизация — отправлять операции</span><span class="switch"><input id="syncEnabled" type="checkbox" /><i></i></span></label>
+              <label class="toggle-field"><span>Отправлять автоматически, когда есть интернет</span><span class="switch"><input id="syncAutoSend" type="checkbox" /><i></i></span></label>
+              <label class="toggle-field"><span>После отправки подтягивать остатки с сервера</span><span class="switch"><input id="syncPullAfterSend" type="checkbox" /><i></i></span></label>
+              <label class="field-label" for="syncUrl">URL Google Apps Script Web App</label>
+              <input id="syncUrl" class="google-sheet-url" type="url" inputmode="url" autocomplete="off" placeholder="https://script.google.com/macros/s/AKfyc…/exec" />
+              <label class="field-label" for="syncKey">Ключ доступа Web App</label>
+              <input id="syncKey" class="google-sheet-url" type="password" autocomplete="off" placeholder="Тот же ключ, что в свойствах скрипта" />
+              <div class="form-row sync-identity"><label>Сотрудник<input id="syncUser" autocomplete="off" placeholder="Сотрудник 1" /></label><label>Это устройство<input id="syncDeviceLabel" autocomplete="off" placeholder="Телефон склада" /></label></div>
+              <div class="google-sync-row"><button class="secondary-action" id="syncTestBtn">Проверить соединение</button><small id="syncTestStatus">Соединение не проверялось</small></div>
+              <div class="google-sync-row"><button class="primary-action" id="syncSendNowBtn">Отправить сейчас</button><button class="secondary-action" id="syncPullBtn">Сверить остатки</button></div>
+              <p class="sync-note">Не отправлено на сервер за смену: <b id="syncUnsyncedCount">0</b> операций. <button class="link-button" type="button" id="syncBackfillBtn">Поставить в очередь</button></p>
+              <p class="sync-warning">Приложение не меняет исходные листы таблицы. Запись идёт только в <b>FORONE_Операции</b> и рабочий лист <b>FORONE_Остатки</b>. Пароли Google нигде не хранятся.</p>
+            </div>
+            <button class="primary-action full-width" id="openHelpBtn">Как работать с программой</button><button class="secondary-action full-width" id="openBackupBtn">Резервная копия и перенос базы</button><button class="secondary-action full-width" data-close-info>Понятно</button></div>
   </div>
 
   <div class="modal-backdrop hidden" id="helpModal" aria-hidden="true">
@@ -171,6 +211,9 @@
         <section><b>4. Резервировать товар</b><p>Откройте карточку позиции, укажите поле «Зарезервировано» и сохраните. Доступно к продаже считается как остаток минус резерв.</p></section>
         <section><b>5. Обновлять из Google Таблиц</b><p>В информации о приложении нажмите «Обновить сейчас». Автоматически источник обновляется через Apps Script каждые 15 минут.</p></section>
         <section><b>6. Сохранить копию</b><p>Откройте «Резервная копия и перенос базы», чтобы сохранить JSON, восстановить базу или передать её на другой телефон.</p></section>
+        <section><b>7. Отправка операций в Google Таблицу</b><p>В блоке «Отправка операций» вставьте URL Web App и ключ, включите двустороннюю синхронизацию и нажмите «Проверить соединение». Каждая операция получает уникальный ID: повторная отправка не приводит к двойному списанию.</p></section>
+        <section><b>8. Работа без интернета</b><p>Операции сохраняются на телефоне и уходят сами, когда связь появится. Жёлтая пилюля вверху показывает, сколько операций ещё не отправлено.</p></section>
+        <section><b>9. Отмена и возврат</b><p>Неотправленную операцию можно отменить — количество вернётся на склад. Отправленную возвращают кнопкой «Вернуть товар»: создаётся обратная запись, а не редактирование журнала.</p></section>
       </div>
       <button class="secondary-action full-width" data-close-help>Закрыть</button>
     </div>
@@ -184,6 +227,7 @@
   <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
   <script>if (!window.XLSX) document.write('<script src="vendor/xlsx.full.min.js"><\/script>');</script>
   <script src="visual-recognition.js"></script>
+  <script src="sync-queue.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
