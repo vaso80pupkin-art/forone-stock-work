@@ -50,6 +50,7 @@ class FakeSheet {
     this.cells = new Map(); // "r,c" -> value
     this.maxRow = 1;
     this.maxCol = 1;
+    this.maxGridColumns = 26;
     this.filter = null;
   }
   key(r, c) { return r + ',' + c; }
@@ -76,6 +77,12 @@ class FakeSheet {
       if (col > last) last = col;
     }
     return Math.max(last, 0);
+  }
+  getMaxColumns() { return this.maxGridColumns; }
+  insertColumnsAfter(afterPosition, howMany) {
+    if (afterPosition < 0 || afterPosition > this.maxGridColumns || howMany < 1) throw new Error('Invalid column insertion');
+    this.maxGridColumns += howMany;
+    return this;
   }
   getRange(row, col, numRows = 1, numCols = 1) { return new FakeRange(this, row, col, numRows, numCols); }
   getDataRange() { return this.getRange(1, 1, Math.max(this.getLastRow(), 1), Math.max(this.getLastColumn(), 1)); }

@@ -1144,6 +1144,12 @@ function countConflicts_(sheet) {
 }
 
 function ensureHeader_(sheet, headers) {
+  // Старый лист может быть создан только до колонки K. Расширяем сетку заранее,
+  // чтобы добавление служебных столбцов не завершилось ошибкой диапазона.
+  if (typeof sheet.getMaxColumns === 'function' && typeof sheet.insertColumnsAfter === 'function') {
+    var maxColumns = sheet.getMaxColumns();
+    if (maxColumns < headers.length) sheet.insertColumnsAfter(maxColumns, headers.length - maxColumns);
+  }
   var first = sheet.getRange(1, 1, 1, headers.length).getValues()[0];
   var same = headers.every(function (value, index) { return text_(first[index]) === value; });
   if (!same) {
@@ -1151,6 +1157,18 @@ function ensureHeader_(sheet, headers) {
       .setFontWeight('bold').setFontColor('#ffffff').setBackground('#173b43');
   }
   sheet.setFrozenRows(1);
+}
+
+/** Меню в таблице для ручного запуска безопасной сверки и диагностики. */
+function onOpen() {
+  try {
+    SpreadsheetApp.getUi().createMenu('FORONE склад')
+      .addItem('Настроить Web App и сверить остатки', 'FORONE_setup')
+      .addItem('Сверить остатки', 'syncForoneStock')
+      .addItem('Проверить состояние', 'FORONE_ping')
+      .addItem('Самотест', 'FORONE_selfTest')
+      .addToUi();
+  } catch (ignored) {}
 }
 
 function formatStockSheet_(sheet, rowCount) {
